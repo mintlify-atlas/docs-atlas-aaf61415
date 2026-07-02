@@ -1,0 +1,412 @@
+---
+title: "Products API: Inventory Product Management"
+sidebarTitle: "Products"
+description: "REST endpoints for creating, listing, updating, and soft-deleting products under /inventario/producto. Includes stock tracking and barcode support."
+---
+
+The **Products** resource (`/inventario/producto`) is the core of the Kantuta POS inventory system. Each `Producto` represents a saleable item with its own pricing, cost, barcode, and live stock counters. Products belong to a `Categoria` — the category relation is eagerly loaded on every query so you always receive the full category object alongside the product. Stock levels are managed automatically: `stock_actual` is decremented when a sale (`venta`) includes the product and incremented when a purchase (`compra`) is registered, keeping your counts in sync without manual intervention.
+
+<Note>
+  All endpoints in this section require a valid JWT access token. Include it as `Authorization: Bearer <access_token>` on every request.
+</Note>
+
+---
+
+## The Producto object
+
+```typescript
+interface Producto extends BaseEntityAudit {
+  id: number;
+  nombre: string;
+  codigo_barras: string | null;
+  precio_venta: number;
+  costo_compra: number;
+  stock_actual: number;
+  stock_minimo: number;
+  categoria: Categoria;
+}
+
+// BaseEntityAudit fields included on every Producto response:
+interface BaseEntityAudit {
+  estado: boolean;        // false when soft-deleted
+  id_user_create: number;
+  id_user_update?: number;
+  created_at: string;     // ISO 8601 timestamp
+  updated_at: string;     // ISO 8601 timestamp
+}
+```
+
+<ResponseField name="id" type="number">
+  Auto-incremented primary key.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Full display name of the product.
+</ResponseField>
+
+<ResponseField name="codigo_barras" type="string | null">
+  Optional barcode string (e.g. EAN-13). Enables fast product lookup at point of sale. `null` when not provided.
+</ResponseField>
+
+<ResponseField name="precio_venta" type="number">
+  Selling price charged to the customer. Stored as a decimal with up to 12 digits and 2 decimal places.
+</ResponseField>
+
+<ResponseField name="costo_compra" type="number">
+  Acquisition cost of the product. Stored as a decimal with up to 12 digits and 2 decimal places. Used for margin calculations.
+</ResponseField>
+
+<ResponseField name="stock_actual" type="number">
+  Current physical quantity available. Automatically decremented on each sale and incremented on each purchase.
+</ResponseField>
+
+<ResponseField name="stock_minimo" type="number">
+  Minimum stock threshold. When `stock_actual` drops to or below this value, a low-stock alert should be shown in your frontend.
+</ResponseField>
+
+<ResponseField name="categoria" type="Categoria">
+  The full `Categoria` object this product belongs to. Always included (eager relation).
+</ResponseField>
+
+<ResponseField name="estado" type="boolean">
+  `true` while the product is active. Set to `false` by a soft delete.
+</ResponseField>
+
+<ResponseField name="id_user_create" type="number">
+  ID of the user who created this record.
+</ResponseField>
+
+<ResponseField name="id_user_update" type="number | undefined">
+  ID of the user who last updated this record.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of record creation.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+---
+
+## Endpoints
+
+### Create a product
+
+<code>POST /inventario/producto</code>
+
+Creates a new product in the inventory. The linked `id_categoria` must reference an existing, active category. All price and stock fields must be zero or positive — negative values are rejected by validation.
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  Full product name. Must be a non-empty string.
+</ParamField>
+
+<ParamField body="codigo_barras" type="string">
+  Optional barcode (e.g. EAN-13, UPC-A). Omit or pass `null` if the product has no barcode.
+</ParamField>
+
+<ParamField body="precio_venta" type="number" required>
+  Selling price. Must be a number ≥ 0. Stored with 2 decimal places.
+</ParamField>
+
+<ParamField body="costo_compra" type="number" required>
+  Purchase cost. Must be a number ≥ 0. Stored with 2 decimal places.
+</ParamField>
+
+<ParamField body="stock_actual" type="number" required>
+  Initial stock on hand. Must be an integer ≥ 0.
+</ParamField>
+
+<ParamField body="stock_minimo" type="number" required>
+  Minimum stock threshold for low-stock alerts. Must be an integer ≥ 0.
+</ParamField>
+
+<ParamField body="id_categoria" type="number" required>
+  Numeric ID of the category this product belongs to. The referenced category must exist.
+</ParamField>
+
+<ParamField body="id_user_create" type="number" required>
+  Numeric ID of the authenticated user performing the creation. Stored for audit purposes.
+</ParamField>
+
+#### Example
+
+```json
+{
+  "nombre": "Audífonos Bluetooth Sony",
+  "codigo_barras": "10203040",
+  "precio_venta": 120.00,
+  "costo_compra": 70.00,
+  "stock_actual": 15,
+  "stock_minimo": 5,
+  "id_categoria": 2,
+  "id_user_create": 1
+}
+```
+
+```bash
+curl -X POST https://api.example.com/inventario/producto \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Audífonos Bluetooth Sony",
+    "codigo_barras": "10203040",
+    "precio_venta": 120.00,
+    "costo_compra": 70.00,
+    "stock_actual": 15,
+    "stock_minimo": 5,
+    "id_categoria": 2,
+    "id_user_create": 1
+  }'
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 7,
+  "nombre": "Audífonos Bluetooth Sony",
+  "codigo_barras": "10203040",
+  "precio_venta": "120.00",
+  "costo_compra": "70.00",
+  "stock_actual": 15,
+  "stock_minimo": 5,
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": null,
+  "created_at": "2025-01-15T11:00:00.000Z",
+  "updated_at": "2025-01-15T11:00:00.000Z",
+  "categoria": {
+    "id": 2,
+    "nombre": "Electrónica",
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-10T08:00:00.000Z",
+    "updated_at": "2025-01-10T08:00:00.000Z"
+  }
+}
+```
+
+---
+
+### List all products
+
+<code>GET /inventario/producto</code>
+
+Returns an array of all products in the inventory with their nested `categoria` relation preloaded. Because `categoria` is an eager relation on the `Producto` entity, the category object is always included — no extra query parameters are needed.
+
+<Tip>
+  Compare `stock_actual` against `stock_minimo` in your frontend to surface low-stock warnings. If `stock_actual <= stock_minimo`, prompt the buyer to reorder.
+</Tip>
+
+#### Example
+
+```bash
+curl -X GET https://api.example.com/inventario/producto \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+```json
+[
+  {
+    "id": 5,
+    "nombre": "Cargador Carga Rápida 20W",
+    "codigo_barras": "750123456789",
+    "precio_venta": "85.50",
+    "costo_compra": "45.00",
+    "stock_actual": 20,
+    "stock_minimo": 5,
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-12T09:00:00.000Z",
+    "updated_at": "2025-01-12T09:00:00.000Z",
+    "categoria": {
+      "id": 1,
+      "nombre": "Cargadores",
+      "estado": true,
+      "id_user_create": 1,
+      "id_user_update": null,
+      "created_at": "2025-01-10T08:00:00.000Z",
+      "updated_at": "2025-01-10T08:00:00.000Z"
+    }
+  }
+]
+```
+
+---
+
+### Get a product by ID
+
+<code>GET /inventario/producto/:id</code>
+
+Retrieves a single product by its numeric primary key. The `categoria` relation is always included in the response.
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the product.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X GET https://api.example.com/inventario/producto/5 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 5,
+  "nombre": "Cargador Carga Rápida 20W",
+  "codigo_barras": "750123456789",
+  "precio_venta": "85.50",
+  "costo_compra": "45.00",
+  "stock_actual": 20,
+  "stock_minimo": 5,
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": null,
+  "created_at": "2025-01-12T09:00:00.000Z",
+  "updated_at": "2025-01-12T09:00:00.000Z",
+  "categoria": {
+    "id": 1,
+    "nombre": "Cargadores",
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-10T08:00:00.000Z",
+    "updated_at": "2025-01-10T08:00:00.000Z"
+  }
+}
+```
+
+---
+
+### Update a product
+
+<code>PATCH /inventario/producto/:id</code>
+
+Partially updates an existing product. All body fields are optional — send only what you need to change. The `updated_at` timestamp is refreshed automatically on every successful update.
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the product to update.
+</ParamField>
+
+#### Request body
+
+<ParamField body="nombre" type="string">
+  Updated product name.
+</ParamField>
+
+<ParamField body="codigo_barras" type="string">
+  Updated barcode. Pass `null` to clear an existing barcode.
+</ParamField>
+
+<ParamField body="precio_venta" type="number">
+  Updated selling price. Must be ≥ 0.
+</ParamField>
+
+<ParamField body="costo_compra" type="number">
+  Updated purchase cost. Must be ≥ 0.
+</ParamField>
+
+<ParamField body="stock_actual" type="number">
+  Updated stock count. Must be an integer ≥ 0. Prefer letting sales and purchases adjust this automatically; only use this field for manual corrections.
+</ParamField>
+
+<ParamField body="stock_minimo" type="number">
+  Updated minimum stock threshold. Must be an integer ≥ 0.
+</ParamField>
+
+<ParamField body="id_categoria" type="number">
+  Reassign the product to a different category by providing its ID.
+</ParamField>
+
+<ParamField body="id_user_update" type="number">
+  Numeric ID of the authenticated user performing the update. Stored for audit purposes.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X PATCH https://api.example.com/inventario/producto/5 \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "precio_venta": 95.00,
+    "stock_minimo": 8,
+    "id_user_update": 2
+  }'
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 5,
+  "nombre": "Cargador Carga Rápida 20W",
+  "codigo_barras": "750123456789",
+  "precio_venta": "95.00",
+  "costo_compra": "45.00",
+  "stock_actual": 20,
+  "stock_minimo": 8,
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": 2,
+  "created_at": "2025-01-12T09:00:00.000Z",
+  "updated_at": "2025-01-15T16:20:00.000Z",
+  "categoria": {
+    "id": 1,
+    "nombre": "Cargadores",
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-10T08:00:00.000Z",
+    "updated_at": "2025-01-10T08:00:00.000Z"
+  }
+}
+```
+
+---
+
+### Delete a product (soft delete)
+
+<code>DELETE /inventario/producto/:id</code>
+
+Soft-deletes a product by setting its `estado` field to `false`. **The record is not physically removed from the database.** Historical sales and purchase lines that reference this product continue to resolve correctly.
+
+<Warning>
+  Soft-deleting a product will not automatically reverse any pending stock operations. Ensure there are no open orders referencing this product before deactivating it.
+</Warning>
+
+<Note>
+  `stock_actual` is automatically decremented when a sale (`venta`) includes this product, and automatically incremented when a purchase (`compra`) registers it. Manual adjustments via `PATCH` should only be used for inventory corrections.
+</Note>
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the product to soft-delete.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X DELETE https://api.example.com/inventario/producto/5 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+Returns an empty body with HTTP status `200`.

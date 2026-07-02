@@ -1,0 +1,363 @@
+---
+title: "WhatsApp API: Messaging Gateway Endpoints"
+sidebarTitle: "WhatsApp"
+description: "REST endpoints for the Kantuta POS WhatsApp gateway. Send text, images, and documents via Baileys. All send endpoints are public — no JWT required."
+---
+
+The WhatsApp gateway in Kantuta POS is powered by [**@whiskeysockets/baileys**](https://github.com/WhiskeySockets/Baileys), an open-source multi-device WhatsApp Web implementation for Node.js. Once a phone number is linked by scanning a QR code, the API can send text messages, images, documents, and group broadcasts entirely from the backend — no third-party SaaS or Meta Business Account required. All messaging endpoints (`/send*`, `/list-groups`, `/connect/view`) are decorated with `@Public()` and bypass the global JWT guard.
+
+---
+
+## Connection & QR Code
+
+### Render QR code as HTML page
+
+```
+GET /whatsapp/connect/view
+```
+
+Opens a browser-friendly HTML page that renders the Baileys QR code as an inline `<img>` tag. Scan the displayed QR with your WhatsApp mobile app to link the corporate number. If WhatsApp is already connected, the page shows a confirmation message instead.
+
+**Access:** Public — no `Authorization` header required.
+
+**Usage:** Navigate directly in a browser:
+
+```
+https://api.kantutapos.com/api/whatsapp/connect/view
+```
+
+---
+
+### Get QR as Base64 JSON
+
+```
+GET /whatsapp/connect
+```
+
+Returns the current QR code as a Base64 data URI (ideal for embedding in a frontend React/Vue component) or a success status if the session is already active.
+
+**Access:** Protected — requires `Authorization: Bearer <access_token>`.
+
+#### Response (not yet connected)
+
+<ResponseField name="success" type="boolean">
+  Always `true`.
+</ResponseField>
+
+<ResponseField name="qrBase64" type="string">
+  Base64-encoded PNG data URI of the QR code. Use as `<img src={qrBase64} />` in your frontend.
+</ResponseField>
+
+#### Response (already connected)
+
+<ResponseField name="success" type="boolean">
+  Always `true`.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"WhatsApp ya está vinculado o el código se está generando de fondo..."`.
+</ResponseField>
+
+---
+
+## Send text message
+
+```
+POST /whatsapp/send
+```
+
+Dispatches a plain-text WhatsApp message to a single recipient. The `code` and `phone` fields are concatenated server-side to build the full international number (e.g. `591` + `71234567` → `59171234567`).
+
+**Access:** Public — no `Authorization` header required.
+
+### Request body
+
+<ParamField body="code" type="string" required>
+  Country calling code — digits only, no `+` prefix. Must be 2–3 digits long (e.g. `"591"` for Bolivia, `"51"` for Peru).
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Local phone number — digits only, no spaces or symbols. Must be 8–15 digits (e.g. `"71234567"`).
+</ParamField>
+
+<ParamField body="message" type="string" required>
+  Plain-text content of the WhatsApp message to deliver.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful delivery.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Mensaje enviado con éxito"`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Raw Baileys message send result containing message ID and server timestamp.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://api.kantutapos.com/api/whatsapp/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "591",
+    "phone": "71234567",
+    "message": "Hola, tu pedido #1042 está listo para retiro."
+  }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Mensaje enviado con éxito",
+  "data": {
+    "key": {
+      "remoteJid": "59171234567@s.whatsapp.net",
+      "fromMe": true,
+      "id": "3EB0A1B2C3D4E5F6"
+    },
+    "status": 1
+  }
+}
+```
+
+---
+
+## Send image
+
+```
+POST /whatsapp/send-image
+```
+
+Uploads an image from your server or client and delivers it as a WhatsApp media message with an optional caption. The file is streamed from memory — no disk I/O on the server.
+
+**Access:** Public — no `Authorization` header required.
+
+**Content-Type:** `multipart/form-data`
+
+### Request fields
+
+<ParamField body="code" type="string" required>
+  Country calling code — digits only, 2–3 characters (e.g. `"591"`).
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Local phone number — digits only, 8–15 characters (e.g. `"71234567"`).
+</ParamField>
+
+<ParamField body="caption" type="string">
+  Optional image caption / description displayed below the image in WhatsApp.
+</ParamField>
+
+<ParamField body="file" type="binary" required>
+  Image file to send (`.png`, `.jpg`, `.jpeg`, `.gif`, etc.). **Maximum size: 5 MB.** Requests exceeding this limit are rejected with HTTP 400.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful delivery.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Archivo de imagen enviado con éxito"`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Raw Baileys media send result.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://api.kantutapos.com/api/whatsapp/send-image \
+  -F "code=591" \
+  -F "phone=71234567" \
+  -F "caption=Comprobante de pago adjunto" \
+  -F "file=@/path/to/comprobante.png"
+```
+
+---
+
+## Send document
+
+```
+POST /whatsapp/send-document
+```
+
+Sends any file type (PDF, DOCX, XLSX, ZIP, etc.) as a WhatsApp document attachment. The recipient sees the filename and can download it directly from the chat.
+
+**Access:** Public — no `Authorization` header required.
+
+**Content-Type:** `multipart/form-data`
+
+### Request fields
+
+<ParamField body="code" type="string" required>
+  Country calling code — digits only, 2–3 characters (e.g. `"591"`).
+</ParamField>
+
+<ParamField body="phone" type="string" required>
+  Local phone number — digits only, 8–15 characters (e.g. `"71234567"`).
+</ParamField>
+
+<ParamField body="fileName" type="string">
+  Optional custom filename shown to the recipient (e.g. `"Factura_Mayo_2025.pdf"`). Falls back to the original uploaded filename if omitted.
+</ParamField>
+
+<ParamField body="file" type="binary" required>
+  Document file to send. **Maximum size: 15 MB.** Files exceeding this limit are rejected with HTTP 400 and the message: `"El archivo es demasiado pesado. El límite máximo permitido es de 15 MB."`.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful delivery.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Documento enviado con éxito"`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Raw Baileys media send result.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://api.kantutapos.com/api/whatsapp/send-document \
+  -F "code=591" \
+  -F "phone=71234567" \
+  -F "fileName=Factura_Mayo_2025.pdf" \
+  -F "file=@/path/to/factura.pdf"
+```
+
+---
+
+## Send message to group
+
+```
+POST /whatsapp/send-to-group
+```
+
+Broadcasts a text message to a WhatsApp group using its official JID (`@g.us` identifier). Retrieve group JIDs with `GET /whatsapp/list-groups`.
+
+**Access:** Public — no `Authorization` header required.
+
+### Request body
+
+<ParamField body="groupId" type="string" required>
+  The full Baileys JID of the target group (e.g. `"120363319482736451@g.us"`). Both `groupId` and `message` are validated server-side — a missing field returns HTTP 400.
+</ParamField>
+
+<ParamField body="message" type="string" required>
+  Content of the group broadcast message.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true` on successful delivery.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Comunicado enviado al grupo con éxito"`.
+</ResponseField>
+
+<ResponseField name="data" type="object">
+  Raw Baileys message send result.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://api.kantutapos.com/api/whatsapp/send-to-group \
+  -H "Content-Type: application/json" \
+  -d '{
+    "groupId": "120363319482736451@g.us",
+    "message": "Estimados colaboradores, el sistema entrará en mantenimiento hoy a las 22:00."
+  }'
+```
+
+```json
+{
+  "success": true,
+  "message": "Comunicado enviado al grupo con éxito",
+  "data": {
+    "key": {
+      "remoteJid": "120363319482736451@g.us",
+      "fromMe": true,
+      "id": "3EB0F1A2B3C4D5E6"
+    },
+    "status": 1
+  }
+}
+```
+
+---
+
+## List groups
+
+```
+GET /whatsapp/list-groups
+```
+
+Returns a list of all WhatsApp groups that the linked corporate number belongs to, along with their Baileys JIDs. Use the `id` values when calling `POST /whatsapp/send-to-group`.
+
+**Access:** Public — no `Authorization` header required.
+
+### Response
+
+<ResponseField name="success" type="boolean">
+  `true`.
+</ResponseField>
+
+<ResponseField name="data" type="array">
+  Array of group objects.
+
+  <Expandable title="Group object">
+    <ResponseField name="id" type="string">
+      Full Baileys JID of the group (e.g. `"120363319482736451@g.us"`).
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Human-readable group name as set in WhatsApp.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl https://api.kantutapos.com/api/whatsapp/list-groups
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    { "id": "120363319482736451@g.us", "name": "Equipo Ventas Kantuta" },
+    { "id": "120363204817362891@g.us", "name": "Soporte Técnico" }
+  ]
+}
+```
+
+---
+
+## Phone number format
+
+All send endpoints (`/send`, `/send-image`, `/send-document`) accept `code` and `phone` as separate fields. The server concatenates them internally before building the WhatsApp JID:
+
+```
+"591" + "71234567" → "59171234567" → "59171234567@s.whatsapp.net"
+```
+
+Pass **only digits** — no `+`, no spaces, no parentheses. The `code` field must be 2–3 digits and `phone` must be 8–15 digits.
+
+<Warning>
+  Use this gateway responsibly and in compliance with [WhatsApp's Terms of Service](https://www.whatsapp.com/legal/terms-of-service). Sending unsolicited bulk messages or operating a high-volume automated broadcast can result in your linked phone number being permanently banned by WhatsApp. This integration is intended for transactional, customer-initiated, or internal-team communications only.
+</Warning>

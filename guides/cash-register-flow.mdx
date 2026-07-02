@@ -1,0 +1,291 @@
+---
+title: "Cash Register Session Flow: Open, Operate, and Close"
+sidebarTitle: "Cash Register Flow"
+description: "Step-by-step guide to managing cash register sessions in Kantuta POS: opening a shift, recording movements, processing transactions, and closing with reconciliation."
+---
+
+In Kantuta POS, every financial transaction — whether a sale, a purchase paid from the drawer, or a cash movement — must be linked to an active **cash register session** (`SesionCaja`). A session represents a single operator shift: it opens with a counted starting float, accumulates all activity during the shift, and closes with a physical cash count that the backend reconciles against the theoretical balance. This lifecycle ensures full auditability and eliminates any end-of-day discrepancies going unexplained.
+
+## Caja Types
+
+Each physical cash register (`Caja`) is created with a `especialidad` field that restricts the types of operations it can process:
+
+<CardGroup cols={3}>
+  <Card title="SOLO_VENTAS" icon="cart-shopping">
+    Dedicated to retail sales only. Sessions on this caja record product sales (`POST /ventas`) but not agent recharge transactions.
+  </Card>
+  <Card title="SOLO_AGENTES" icon="people-arrows">
+    Dedicated to agent operations exclusively. Sales cannot be posted against this caja's sessions.
+  </Card>
+  <Card title="MIXTA" icon="shuffle">
+    The default. Accepts both retail sales and agent transactions in the same session — ideal for small stores with a single counter.
+  </Card>
+</CardGroup>
+
+<Note>
+  Only users with the **Administrador** role can create new physical cajas via `POST /cajas`. Assigning the wrong `especialidad` at creation time will cause validation errors downstream when operators try to post mismatched transaction types.
+</Note>
+
+---
+
+## Session Lifecycle
+
+<Steps>
+  <Step title="Check for an Existing Active Session">
+    Before opening a new session, query whether the operator already has an open one. This prevents duplicates and lets your frontend inject the `id_sesion_caja` automatically.
+
+    ```http
+    GET /cajas/sesion-activa/:id_usuario
+    ```
+
+    **Example:**
+
+    ```bash
+    curl -X GET https://api.example.com/cajas/sesion-activa/2 \
+      -H "Authorization: Bearer <token>"
+    ```
+
+    **Response — session exists (`200 OK`):**
+
+    ```json
+    {
+      "id": 12,
+      "id_caja": 1,
+      "monto_inicial": "100.00",
+      "estado_sesion": "ABIERTA",
+      "fecha_apertura": "2025-06-01T09:00:00.000Z",
+      "id_usuario": 2
+    }
+    ```
+
+    If no session is open the endpoint returns `null` or a `404`. In that case, redirect the operator to the open-session screen.
+  </Step>
+
+  <Step title="Open a Session">
+    Post to `/cajas/abrir` with the physical caja ID, the starting float amount, and the operator's user ID.
+
+    ```http
+    POST /cajas/abrir
+    ```
+
+    **Request body:**
+
+    ```json
+    {
+      "id_caja": 1,
+      "monto_inicial": 150.00,
+      "id_usuario": 2,
+      "id_user_create": 2
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `id_caja` | `integer` | ✅ | ID of the physical cash register |
+    | `monto_inicial` | `number` | Optional | Starting float (min `0`). Optional for Operadores |
+    | `id_usuario` | `integer` | ✅ | ID of the operator opening the session |
+    | `id_user_create` | `integer` | ✅ | Audit field — usually the same as `id_usuario` |
+
+    **Example:**
+
+    ```bash
+    curl -X POST https://api.example.com/cajas/abrir \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "id_caja": 1,
+        "monto_inicial": 150.00,
+        "id_usuario": 2,
+        "id_user_create": 2
+      }'
+    ```
+
+    **Response (`201 Created`):**
+
+    ```json
+    {
+      "id": 12,
+      "id_caja": 1,
+      "id_usuario": 2,
+      "monto_inicial": "150.00",
+      "estado_sesion": "ABIERTA",
+      "fecha_apertura": "2025-06-01T09:00:00.000Z"
+    }
+    ```
+
+    Store the returned `id` as `id_sesion_caja` in your application context — every subsequent transaction on this shift must reference it.
+
+    <Warning>
+      A caja **cannot be opened** if the operator (`id_usuario`) already has a session with `estado_sesion: ABIERTA`. The backend will reject the request. Always call `GET /cajas/sesion-activa/:id_usuario` first.
+    </Warning>
+  </Step>
+
+  <Step title="Process Sales and Agent Transactions">
+    With an open session, post sales and agent operations referencing the active `id_sesion_caja`. Stock and session balances are updated automatically.
+
+    ```json
+    {
+      "metodo_pago": "EFECTIVO",
+      "id_sesion_caja": 12,
+      "detalles": [
+        { "id_producto": 3, "cantidad": 2, "precio_unitario": 25.50 }
+      ],
+      "id_user_create": 2
+    }
+    ```
+
+    See the [Sales Workflow](/guides/sales-workflow) guide for full details on creating sales.
+  </Step>
+
+  <Step title="Record Cash Movements (Ingresos & Egresos)">
+    Track any manual cash-in or cash-out that is not a direct sale — for example, petty cash withdrawals, change fund top-ups, or supplier payments made from the drawer.
+
+    ```http
+    POST /cajas/movimiento
+    ```
+
+    **Request body:**
+
+    ```json
+    {
+      "tipo": "EGRESO",
+      "monto": 25.00,
+      "motivo": "Compra de bolsas para empaque",
+      "id_sesion_caja": 12,
+      "id_user_create": 2
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `tipo` | `INGRESO` \| `EGRESO` | ✅ | Direction of cash flow |
+    | `monto` | `number` | ✅ | Amount (minimum `0.10`) |
+    | `motivo` | `string` | ✅ | Reason for the movement |
+    | `id_sesion_caja` | `integer` | ✅ | Active session to attach this movement to |
+    | `id_user_create` | `integer` | ✅ | Audit field |
+
+    **Example:**
+
+    ```bash
+    curl -X POST https://api.example.com/cajas/movimiento \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "tipo": "INGRESO",
+        "monto": 200.00,
+        "motivo": "Recarga de fondo de cambio",
+        "id_sesion_caja": 12,
+        "id_user_create": 2
+      }'
+    ```
+  </Step>
+
+  <Step title="Check the Live Balance">
+    At any point during the shift, fetch the running balance for the session. This is the theoretical total before close.
+
+    ```http
+    GET /cajas/sesion/:id/balance
+    ```
+
+    **Example:**
+
+    ```bash
+    curl -X GET https://api.example.com/cajas/sesion/12/balance \
+      -H "Authorization: Bearer <token>"
+    ```
+
+    The response includes accumulated sales totals, agent totals, cash movements, and the theoretical final balance.
+  </Step>
+
+  <Step title="Close the Session (End-of-Shift Reconciliation)">
+    At shift end, the operator physically counts the cash in the drawer and submits the real amount. The backend automatically calculates:
+
+    - **`monto_final_teorico`** — starting float + all sales + ingresos − egresos
+    - **`diferencia`** — `monto_final_real` − `monto_final_teorico` (negative = shortage, positive = surplus)
+
+    ```http
+    PATCH /cajas/sesion/:id/cerrar
+    ```
+
+    **Request body:**
+
+    ```json
+    {
+      "monto_final_real": 1450.80,
+      "id_user_update": 2
+    }
+    ```
+
+    | Field | Type | Required | Description |
+    |---|---|---|---|
+    | `monto_final_real` | `number` | ✅ | Physical cash counted by operator (min `0`) |
+    | `id_user_update` | `number` | ✅ | Audit field |
+
+    **Example:**
+
+    ```bash
+    curl -X PATCH https://api.example.com/cajas/sesion/12/cerrar \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "monto_final_real": 1450.80,
+        "id_user_update": 2
+      }'
+    ```
+
+    **Response (`200 OK`):**
+
+    ```json
+    {
+      "id": 12,
+      "estado_sesion": "CERRADA",
+      "monto_inicial": "150.00",
+      "monto_final_teorico": "1451.30",
+      "monto_final_real": "1450.80",
+      "diferencia": "-0.50",
+      "fecha_apertura": "2025-06-01T09:00:00.000Z",
+      "fecha_cierre": "2025-06-01T18:00:00.000Z"
+    }
+    ```
+
+    Once closed, the session transitions to `estado_sesion: CERRADA` and no further transactions can be posted against it.
+  </Step>
+</Steps>
+
+---
+
+## Quick Reference: Session Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/cajas` | List all physical cajas |
+| `POST` | `/cajas` | Create a physical caja (**Administrador** only) |
+| `GET` | `/cajas/:id` | Get caja by ID |
+| `PATCH` | `/cajas/:id` | Update a caja |
+| `DELETE` | `/cajas/:id?id_user_update=` | Soft-delete a caja |
+| `POST` | `/cajas/abrir` | Open a new session |
+| `GET` | `/cajas/sesion-activa/:id_usuario` | Get operator's active session |
+| `GET` | `/cajas/sesion/:id/balance` | Get running session balance |
+| `PATCH` | `/cajas/sesion/:id/cerrar` | Close session with reconciliation |
+| `POST` | `/cajas/movimiento` | Record a cash in/out movement |
+
+---
+
+## Role Permissions
+
+<CardGroup cols={2}>
+  <Card title="Administrador" icon="shield-halved">
+    - Create physical cajas (`POST /cajas`)
+    - Open sessions (`POST /cajas/abrir`)
+    - Close sessions, view balances, and manage movements
+  </Card>
+  <Card title="Operador" icon="user">
+    - Open sessions (`POST /cajas/abrir`)
+    - Record movements and process transactions against their own active session
+    - Cannot create physical cajas
+  </Card>
+</CardGroup>
+
+<Tip>
+  For frontend integrations, store the active `SesionCaja` ID in a global React context (e.g., `CajaContext`). This lets you inject `id_sesion_caja` automatically into every sale or purchase form without requiring operators to type it manually. See the flow diagram in the backend's `guia_flujo_sesion_caja.md` for a full state-machine reference.
+</Tip>

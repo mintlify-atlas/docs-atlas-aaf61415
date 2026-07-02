@@ -1,0 +1,421 @@
+---
+title: "Personas API: Personal Profile Management"
+sidebarTitle: "Personas"
+description: "REST endpoints for creating and managing personal profiles (names, DOB, gender) linked to user accounts in Kantuta POS Backend."
+---
+
+The `/persona` resource manages the **personal data layer** of the Kantuta POS identity model. Every `Usuario` (login account) has exactly one `Persona` that holds the individual's real name, date of birth, and gender. This separation keeps credentials distinct from personal information and simplifies audits. While a `Persona` can be created in isolation via `POST /persona`, in most workflows it is created automatically alongside a `Usuario` through `POST /usuario/register`. The update endpoint deliberately uses `PUT` (not `PATCH`) and accepts the record ID inside the request body rather than the URL path.
+
+<Note>
+  When you register a user with `POST /usuario/register`, a `Persona` record is created automatically. You only need to call `POST /persona` directly if you are managing persona records independently of user accounts.
+</Note>
+
+---
+
+## POST /persona
+
+Creates a new `Persona` record containing the individual's personal details. This endpoint is available without authentication when creating a standalone personal profile.
+
+### Request body
+
+<ParamField body="nombres" type="string" required>
+  Given name(s) of the individual — e.g. `"María Elena"`. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="p_apellido" type="string" required>
+  First (paternal) surname — e.g. `"Quispe"`. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="s_apellido" type="string" required>
+  Second (maternal) surname — e.g. `"Condori"`. Maximum 50 characters. Can be set to an empty string if not applicable.
+</ParamField>
+
+<ParamField body="fecha_nacimiento" type="string" required>
+  Date of birth in `YYYY-MM-DD` format — e.g. `"1995-03-22"`. Stored as a `DATE` column in the database.
+</ParamField>
+
+<ParamField body="genero" type="string" required>
+  Gender code. Accepted values: `"M"` (male) or `"F"` (female). Maximum 10 characters.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="number">
+  `200` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Se creó la persona con éxito!"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="Persona">
+  The newly created `Persona` object. See [Persona interface](#persona-typescript-interface) below.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/persona \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombres": "María Elena",
+    "p_apellido": "Quispe",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "status": 200,
+  "message": "Se creó la persona con éxito!",
+  "data": {
+    "id": 7,
+    "nombres": "María Elena",
+    "p_apellido": "Quispe",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F",
+    "estado": true,
+    "id_user_create": null,
+    "id_user_update": null,
+    "created_at": "2024-07-10T14:22:00.000Z",
+    "updated_at": "2024-07-10T14:22:00.000Z"
+  }
+}
+```
+</ResponseExample>
+
+---
+
+## GET /persona
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Returns all `Persona` records in the system. Requires a valid Bearer token. Active and inactive records are both returned — filter by `estado` client-side if needed.
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>` — obtained from `POST /auth/login`.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="number">
+  `200` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Listado de personas registradas!"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="Persona[]">
+  Array of all `Persona` objects stored in the database.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/persona \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "status": 200,
+  "message": "Listado de personas registradas!",
+  "data": [
+    {
+      "id": 1,
+      "nombres": "Carlos",
+      "p_apellido": "Flores",
+      "s_apellido": "Mamani",
+      "fecha_nacimiento": "1990-06-15",
+      "genero": "M",
+      "estado": true,
+      "id_user_create": 1,
+      "id_user_update": null,
+      "created_at": "2024-01-15T10:00:00.000Z",
+      "updated_at": "2024-01-15T10:00:00.000Z"
+    },
+    {
+      "id": 7,
+      "nombres": "María Elena",
+      "p_apellido": "Quispe",
+      "s_apellido": "Condori",
+      "fecha_nacimiento": "1995-03-22",
+      "genero": "F",
+      "estado": true,
+      "id_user_create": null,
+      "id_user_update": null,
+      "created_at": "2024-07-10T14:22:00.000Z",
+      "updated_at": "2024-07-10T14:22:00.000Z"
+    }
+  ]
+}
+```
+</ResponseExample>
+
+---
+
+## GET /persona/:id
+
+Retrieves a single `Persona` record by its numeric ID. No authentication required for individual lookups.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the `Persona` record to retrieve.
+</ParamField>
+
+### Response
+
+Returns the `Persona` object directly (not wrapped in a status envelope).
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/persona/7
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 7,
+  "nombres": "María Elena",
+  "p_apellido": "Quispe",
+  "s_apellido": "Condori",
+  "fecha_nacimiento": "1995-03-22",
+  "genero": "F",
+  "estado": true,
+  "id_user_create": null,
+  "id_user_update": null,
+  "created_at": "2024-07-10T14:22:00.000Z",
+  "updated_at": "2024-07-10T14:22:00.000Z"
+}
+```
+</ResponseExample>
+
+---
+
+## PUT /persona
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Updates an existing `Persona` record. This endpoint uses **`PUT`** — not `PATCH` — and the ID of the record to update is passed **in the request body**, not in the URL path. All profile fields are optional; only those present in the payload will be updated.
+
+<Warning>
+  This endpoint uses `PUT /persona` with no ID in the URL. You must include the `id` field in the request body to identify which persona to update. Omitting `id` will cause the request to fail.
+</Warning>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+### Request body
+
+<ParamField body="id" type="number" required>
+  The primary key of the `Persona` record to update.
+</ParamField>
+
+<ParamField body="id_user_update" type="number" required>
+  The ID of the authenticated user performing the update, used for audit tracking.
+</ParamField>
+
+<ParamField body="nombres" type="string">
+  Updated given name(s). Maximum 100 characters.
+</ParamField>
+
+<ParamField body="p_apellido" type="string">
+  Updated paternal surname. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="s_apellido" type="string">
+  Updated maternal surname. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="fecha_nacimiento" type="string">
+  Updated date of birth in `YYYY-MM-DD` format.
+</ParamField>
+
+<ParamField body="genero" type="string">
+  Updated gender code — `"M"` or `"F"`.
+</ParamField>
+
+### Response
+
+Returns the updated `Persona` object.
+
+<ResponseField name="id" type="number">
+  Primary key of the updated record.
+</ResponseField>
+
+<ResponseField name="nombres" type="string">
+  Updated given name(s).
+</ResponseField>
+
+<ResponseField name="p_apellido" type="string">
+  Updated paternal surname.
+</ResponseField>
+
+<ResponseField name="s_apellido" type="string">
+  Updated maternal surname (nullable).
+</ResponseField>
+
+<ResponseField name="fecha_nacimiento" type="string">
+  Updated date of birth (`YYYY-MM-DD`).
+</ResponseField>
+
+<ResponseField name="genero" type="string">
+  Updated gender code.
+</ResponseField>
+
+<ResponseField name="id_user_update" type="number">
+  ID of the user who last updated this record — recorded for audit purposes.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp automatically updated on save.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X PUT http://localhost:3000/persona \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -d '{
+    "id": 7,
+    "id_user_update": 1,
+    "nombres": "María Elena",
+    "p_apellido": "Quispe Tapia",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 7,
+  "nombres": "María Elena",
+  "p_apellido": "Quispe Tapia",
+  "s_apellido": "Condori",
+  "fecha_nacimiento": "1995-03-22",
+  "genero": "F",
+  "estado": true,
+  "id_user_create": null,
+  "id_user_update": 1,
+  "created_at": "2024-07-10T14:22:00.000Z",
+  "updated_at": "2024-07-10T15:30:00.000Z"
+}
+```
+</ResponseExample>
+
+---
+
+## Persona TypeScript Interface
+
+```typescript
+export interface BaseEntityAudit {
+  estado: boolean;
+  id_user_create: number | null;
+  id_user_update?: number | null;
+  created_at: string; // ISO 8601 date string
+  updated_at: string; // ISO 8601 date string
+}
+
+/** Personal profile record, always linked 1-to-1 with a Usuario */
+export interface Persona extends BaseEntityAudit {
+  id: number;
+  nombres: string;          // Max 100 chars — given name(s)
+  p_apellido: string;       // Max 50 chars  — paternal surname
+  s_apellido?: string;      // Max 50 chars  — maternal surname (nullable)
+  fecha_nacimiento: string; // 'YYYY-MM-DD'
+  genero: string;           // 'M' | 'F'
+}
+
+// POST /persona
+export interface CreatePersonaRequest {
+  nombres: string;
+  p_apellido: string;
+  s_apellido: string;
+  fecha_nacimiento: string; // 'YYYY-MM-DD'
+  genero: string;
+}
+
+export interface CreatePersonaResponse {
+  status: 200;
+  message: string;
+  data: Persona;
+}
+
+// GET /persona (list)
+export interface ListPersonasResponse {
+  status: number;
+  message: string;
+  data: Persona[];
+}
+
+// PUT /persona (update — ID in body)
+export interface UpdatePersonaRequest {
+  id: number;               // Required: which persona to update
+  id_user_update: number;   // Required: audit trail
+  nombres?: string;
+  p_apellido?: string;
+  s_apellido?: string;
+  fecha_nacimiento?: string;
+  genero?: string;
+}
+```
+
+### Axios usage example
+
+```typescript
+import api from './api'; // The configured Axios instance (see Auth page)
+import {
+  CreatePersonaRequest,
+  CreatePersonaResponse,
+  ListPersonasResponse,
+  UpdatePersonaRequest,
+  Persona,
+} from './types';
+
+/** Create a standalone persona record */
+export async function createPersona(data: CreatePersonaRequest): Promise<CreatePersonaResponse> {
+  const response = await api.post<CreatePersonaResponse>('/persona', data);
+  return response.data;
+}
+
+/** List all personas (requires auth token in Axios instance) */
+export async function listPersonas(): Promise<ListPersonasResponse> {
+  const response = await api.get<ListPersonasResponse>('/persona');
+  return response.data;
+}
+
+/** Fetch a single persona by ID */
+export async function getPersona(id: number): Promise<Persona> {
+  const response = await api.get<Persona>(`/persona/${id}`);
+  return response.data;
+}
+
+/**
+ * Update a persona — note: uses PUT, ID in body, not URL.
+ * id_user_update is the ID of the currently logged-in user.
+ */
+export async function updatePersona(data: UpdatePersonaRequest): Promise<Persona> {
+  const response = await api.put<Persona>('/persona', data);
+  return response.data;
+}
+```
+
+<Tip>
+  To retrieve the persona of the currently authenticated user, read the `persona` field from the `Usuario` object returned by `POST /auth/login` — no extra request is needed.
+</Tip>

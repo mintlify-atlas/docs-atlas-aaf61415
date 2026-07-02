@@ -1,0 +1,241 @@
+---
+title: "Recargas API: Mobile Top-Up Management"
+sidebarTitle: "Recargas"
+description: "REST endpoints for processing mobile top-up transactions (recargas) and managing operator balance injections in Kantuta POS Backend."
+---
+
+The Recargas API manages mobile carrier top-ups (recargas) sold through the POS terminal. The store maintains a pre-funded balance with each mobile operator (Tigo, Entel, Viva), and when a client purchases a top-up, the corresponding amount is deducted from that operator's balance. To replenish an operator's balance, administrators record a balance injection (`inyección`) — also debited from a cash register session. This creates a full, trackable loop from cash on hand to operator credit to client top-up delivery.
+
+<Note>
+  All endpoints require a valid `Authorization: Bearer <access_token>` header.
+</Note>
+
+---
+
+## Process a Client Top-Up
+
+```bash
+POST /recargas/cliente
+```
+
+Processes a mobile top-up for a customer. The requested `monto` is deducted from the store's current balance for the specified `operadora`. The transaction is linked to an active cash register session (`id_caja_sesion`), recording the incoming cash from the customer.
+
+<Warning>
+  If the store's `saldo_actual` for the given `operadora` is insufficient to cover the requested `monto`, the request will be rejected. Inject more balance via `POST /recargas/inyeccion` before retrying.
+</Warning>
+
+#### Request Body
+
+<ParamField body="operadora" type="string" required>
+  Mobile carrier for the top-up. One of: `"Tigo"`, `"Entel"`, `"Viva"`.
+</ParamField>
+<ParamField body="numero_cliente" type="string" required>
+  The client's mobile phone number to be topped up (e.g., `"78945612"`).
+</ParamField>
+<ParamField body="monto" type="number" required>
+  Top-up amount. Minimum `0.1`.
+</ParamField>
+<ParamField body="id_caja_sesion" type="number" required>
+  ID of the active cash register session where this sale is being processed.
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/recargas/cliente \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operadora": "Tigo",
+    "numero_cliente": "78945612",
+    "monto": 10.50,
+    "id_caja_sesion": 101
+  }'
+```
+
+#### Response — `RecargaCliente`
+
+<ResponseField name="id" type="number">
+  Unique identifier of the top-up record.
+</ResponseField>
+<ResponseField name="operadora" type="string">
+  Mobile carrier used: `"Tigo"`, `"Entel"`, or `"Viva"`.
+</ResponseField>
+<ResponseField name="numero_cliente" type="string">
+  Phone number that received the top-up.
+</ResponseField>
+<ResponseField name="monto" type="number">
+  Top-up amount processed.
+</ResponseField>
+<ResponseField name="fecha_hora" type="string">
+  ISO 8601 timestamp of the transaction.
+</ResponseField>
+<ResponseField name="id_caja_sesion" type="number">
+  ID of the session this transaction is linked to.
+</ResponseField>
+
+---
+
+## Inject Balance to an Operator
+
+```bash
+POST /recargas/inyeccion
+```
+
+Injects (adds) balance to a specific mobile operator's store account. This represents a purchase of operator credit, and the cost is recorded as an `EGRESO` on the specified cash register session. Use this endpoint whenever the store replenishes its top-up stock with a carrier.
+
+#### Request Body
+
+<ParamField body="operadora_destino" type="string" required>
+  The mobile carrier whose balance is being replenished. One of: `"Tigo"`, `"Entel"`, `"Viva"`.
+</ParamField>
+<ParamField body="monto" type="number" required>
+  Amount of balance to inject. Minimum `1`.
+</ParamField>
+<ParamField body="id_caja_sesion" type="number" required>
+  ID of the active session from which the injection cost is deducted.
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/recargas/inyeccion \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "operadora_destino": "Tigo",
+    "monto": 100.00,
+    "id_caja_sesion": 101
+  }'
+```
+
+#### Response — `InyeccionOperadora`
+
+<ResponseField name="id" type="number">
+  Unique identifier of the injection record.
+</ResponseField>
+<ResponseField name="operadora_destino" type="string">
+  Mobile carrier whose balance was topped up.
+</ResponseField>
+<ResponseField name="monto" type="number">
+  Injected amount.
+</ResponseField>
+<ResponseField name="fecha_hora" type="string">
+  ISO 8601 timestamp of the injection.
+</ResponseField>
+<ResponseField name="id_caja_origen" type="number">
+  ID of the session from which the cash was deducted.
+</ResponseField>
+
+---
+
+## List All Operator Balances
+
+```bash
+GET /recargas/operadoras/saldos
+```
+
+Returns the current balance (`saldo_actual`) for each registered mobile operator. Use this before processing a client top-up to verify sufficient funds are available.
+
+```bash
+curl https://api.example.com/recargas/operadoras/saldos \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response — `OperadoraSaldo[]`
+
+<ResponseField name="id" type="number">
+  Unique identifier.
+</ResponseField>
+<ResponseField name="nombre_operadora" type="string">
+  Carrier name: `"Tigo"`, `"Entel"`, or `"Viva"`. Unique per carrier.
+</ResponseField>
+<ResponseField name="saldo_actual" type="number">
+  Current available balance for selling top-ups to clients.
+</ResponseField>
+
+---
+
+## List Client Top-Up History
+
+```bash
+GET /recargas/historial/clientes
+```
+
+Returns the complete history of all client top-up transactions, ordered by date. Useful for shift summaries, reconciliation, and customer lookup.
+
+```bash
+curl https://api.example.com/recargas/historial/clientes \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## List Operator Injection History
+
+```bash
+GET /recargas/historial/inyecciones
+```
+
+Returns the complete history of all operator balance injections. Use this to audit when and how much balance was purchased from each carrier.
+
+```bash
+curl https://api.example.com/recargas/historial/inyecciones \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## TypeScript Interfaces
+
+```typescript
+// Supported mobile carriers
+type OperadoraNombre = 'Tigo' | 'Entel' | 'Viva';
+
+interface RecargaCliente {
+  id: number;
+  operadora: OperadoraNombre;
+  numero_cliente: string;
+  monto: number;               // min: 0.1
+  fecha_hora: string;          // ISO 8601 timestamp
+  id_caja_sesion: number;
+}
+
+interface InyeccionOperadora {
+  id: number;
+  operadora_destino: OperadoraNombre;
+  monto: number;               // min: 1
+  fecha_hora: string;          // ISO 8601 timestamp
+  id_caja_origen: number;      // Session from which cash was deducted
+}
+
+interface OperadoraSaldo {
+  id: number;
+  nombre_operadora: OperadoraNombre;  // Unique per carrier
+  saldo_actual: number;               // Current available balance
+}
+
+// POST /recargas/cliente request body
+interface CreateRecargaClienteDto {
+  operadora: OperadoraNombre;
+  numero_cliente: string;
+  monto: number;               // min: 0.1
+  id_caja_sesion: number;
+}
+
+// POST /recargas/inyeccion request body
+interface CreateInyeccionDto {
+  operadora_destino: OperadoraNombre;
+  monto: number;               // min: 1
+  id_caja_sesion: number;
+}
+```
+
+---
+
+## Balance Flow Overview
+
+<Tip>
+  The recargas module follows a two-step cycle:
+
+  1. **Inject balance** (`POST /recargas/inyeccion`) — store purchases credit from a carrier. Cash exits the register (`EGRESO`), operator `saldo_actual` increases.
+  2. **Sell top-up** (`POST /recargas/cliente`) — store sells credit to a client. Cash enters the register, operator `saldo_actual` decreases.
+
+  Monitor `GET /recargas/operadoras/saldos` regularly to ensure each carrier has sufficient balance before peak selling hours.
+</Tip>

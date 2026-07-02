@@ -1,0 +1,425 @@
+---
+title: "Cajas API: Cash Register and Session Management"
+sidebarTitle: "Cajas"
+description: "REST endpoints for managing physical cash registers (cajas), opening and closing sessions, recording cash movements, and checking session balances."
+---
+
+The Cajas API is the backbone of Kantuta POS's financial accountability system. It governs the entire lifecycle of a physical cash register — from initial creation and configuration, through the opening and closing of operator shifts (sessions), to the recording of ad-hoc cash movements such as petty cash disbursements. Every sale and agent transaction is tied to an active session, making session management a prerequisite for most POS operations.
+
+<Note>
+  All endpoints in this module require a valid `Authorization: Bearer <access_token>` header. Most endpoints are accessible to both `Administrador` and `Operador` roles unless otherwise noted.
+</Note>
+
+---
+
+## Physical Cajas
+
+### List All Cajas
+
+<ParamField header="Authorization" type="string" required>
+  Bearer token obtained from the auth endpoint.
+</ParamField>
+
+```bash
+GET /cajas
+```
+
+Returns an array of all registered physical cash registers, including their current configuration and specialty.
+
+#### Response
+
+<ResponseField name="id" type="number">
+  Unique identifier of the caja.
+</ResponseField>
+<ResponseField name="nombre" type="string">
+  Human-readable name for the cash register (e.g., `"Caja 01 - Ventas"`).
+</ResponseField>
+<ResponseField name="especialidad" type="string">
+  Operational mode: `SOLO_VENTAS`, `SOLO_AGENTES`, or `MIXTA`.
+</ResponseField>
+<ResponseField name="saldo" type="number">
+  Base balance assigned at creation (immutable reference amount).
+</ResponseField>
+<ResponseField name="sesiones" type="SesionCaja[]">
+  Historical list of sessions associated with this caja.
+</ResponseField>
+
+---
+
+### Create a Caja
+
+<Warning>
+  This endpoint is restricted to the `Administrador` role only.
+</Warning>
+
+```bash
+POST /cajas
+```
+
+Creates a new physical cash register. Each caja can be configured to accept only sales, only agent transactions, or both.
+
+#### Request Body
+
+<ParamField body="nombre" type="string" required>
+  Display name for the caja. Minimum 3 characters (e.g., `"Caja 02 - Agentes"`).
+</ParamField>
+<ParamField body="especialidad" type="string" required>
+  Operational mode for the caja. One of: `SOLO_VENTAS`, `SOLO_AGENTES`, `MIXTA`.
+</ParamField>
+<ParamField body="id_user_create" type="number">
+  ID of the administrator creating this record (for audit trail).
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/cajas \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Caja 03 - Mixta",
+    "especialidad": "MIXTA",
+    "id_user_create": 1
+  }'
+```
+
+---
+
+### Get a Single Caja
+
+```bash
+GET /cajas/:id
+```
+
+Returns a specific caja by its ID, including its complete session history.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the caja.
+</ParamField>
+
+---
+
+### Update a Caja
+
+```bash
+PATCH /cajas/:id
+```
+
+Partially updates a caja's properties (e.g., rename it or change its specialty).
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the caja to update.
+</ParamField>
+
+#### Request Body
+
+All fields are optional. Provide only the fields you want to change.
+
+<ParamField body="nombre" type="string">
+  New display name for the caja.
+</ParamField>
+<ParamField body="especialidad" type="string">
+  New operational mode: `SOLO_VENTAS`, `SOLO_AGENTES`, or `MIXTA`.
+</ParamField>
+<ParamField body="id_user_update" type="number">
+  ID of the user performing the update (audit trail).
+</ParamField>
+
+---
+
+### Delete a Caja (Soft Delete)
+
+```bash
+DELETE /cajas/:id?id_user_update=N
+```
+
+Soft-deletes a caja, marking it as inactive without removing it from the database. The `id_user_update` query parameter is **required** to record who performed the deletion.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the caja to delete.
+</ParamField>
+
+#### Query Parameters
+
+<ParamField query="id_user_update" type="number" required>
+  ID of the administrator performing the soft delete.
+</ParamField>
+
+```bash
+curl -X DELETE "https://api.example.com/cajas/3?id_user_update=1" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## Sessions
+
+### Open a Session (Abrir Caja)
+
+```bash
+POST /cajas/abrir
+```
+
+Opens a new shift session on a physical caja, assigning it to a specific user/operator. An active session is required before any sales or agent transactions can be processed.
+
+<Note>
+  Accessible by both `Administrador` and `Operador` roles. For `Operador` users, `monto_inicial` is optional — it may be set by management policy.
+</Note>
+
+#### Request Body
+
+<ParamField body="id_caja" type="number" required>
+  ID of the physical cash register to open.
+</ParamField>
+<ParamField body="monto_inicial" type="number">
+  Starting cash amount placed in the register for making change. Minimum `0`. Optional for Operadores.
+</ParamField>
+<ParamField body="id_usuario" type="number" required>
+  ID of the user (cashier) who will operate this session.
+</ParamField>
+<ParamField body="id_user_create" type="number" required>
+  ID of the user creating this record (for audit trail — often the same as `id_usuario`).
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/cajas/abrir \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id_caja": 1,
+    "monto_inicial": 200.00,
+    "id_usuario": 2,
+    "id_user_create": 2
+  }'
+```
+
+#### Response
+
+Returns a `SesionCaja` object with `estado_sesion: "ABIERTA"`.
+
+<ResponseField name="id" type="number">
+  Unique session identifier.
+</ResponseField>
+<ResponseField name="monto_inicial" type="number">
+  Opening cash amount.
+</ResponseField>
+<ResponseField name="estado_sesion" type="string">
+  Session status. Will be `"ABIERTA"` on successful open.
+</ResponseField>
+<ResponseField name="fecha_apertura" type="string">
+  ISO 8601 timestamp of when the session was opened.
+</ResponseField>
+<ResponseField name="id_caja" type="number">
+  ID of the associated physical caja.
+</ResponseField>
+<ResponseField name="id_usuario" type="number">
+  ID of the operator assigned to this session.
+</ResponseField>
+
+---
+
+### Close a Session (Cerrar Caja)
+
+```bash
+PATCH /cajas/sesion/:id/cerrar
+```
+
+Closes an active session. The operator provides the physically counted cash (`monto_final_real`). The backend automatically calculates the theoretical closing balance (`monto_final_teorico`) from all recorded transactions and computes the `diferencia` (overage or shortage).
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the session to close.
+</ParamField>
+
+#### Request Body
+
+<ParamField body="monto_final_real" type="number" required>
+  The physical cash amount counted by the operator at closing. Minimum `0`.
+</ParamField>
+<ParamField body="id_user_update" type="number" required>
+  ID of the user closing the session (audit trail).
+</ParamField>
+
+```bash
+curl -X PATCH https://api.example.com/cajas/sesion/101/cerrar \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "monto_final_real": 1450.80,
+    "id_user_update": 1
+  }'
+```
+
+#### Response
+
+Returns the updated `SesionCaja` with `estado_sesion: "CERRADA"`.
+
+<ResponseField name="estado_sesion" type="string">
+  `"CERRADA"` after successful close.
+</ResponseField>
+<ResponseField name="monto_final_teorico" type="number">
+  Backend-calculated expected closing balance (monto_inicial + all ingresos − all egresos + ventas + agentes).
+</ResponseField>
+<ResponseField name="monto_final_real" type="number">
+  Physical cash counted by the operator.
+</ResponseField>
+<ResponseField name="diferencia" type="number">
+  `monto_final_real − monto_final_teorico`. Positive = surplus, negative = shortage.
+</ResponseField>
+<ResponseField name="fecha_cierre" type="string">
+  ISO 8601 timestamp of session closure.
+</ResponseField>
+
+---
+
+### Get Active Session for a User
+
+```bash
+GET /cajas/sesion-activa/:id_usuario
+```
+
+Retrieves the currently open session assigned to a specific user. Useful for determining whether an operator already has an active shift before starting a new one.
+
+#### Path Parameters
+
+<ParamField path="id_usuario" type="number" required>
+  The user ID to query.
+</ParamField>
+
+---
+
+### Get Session Balance
+
+```bash
+GET /cajas/sesion/:id/balance
+```
+
+Returns the current running balance of an active session, reflecting all transactions recorded so far during the shift.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the session.
+</ParamField>
+
+---
+
+## Cash Movements
+
+### Record a Movement
+
+```bash
+POST /cajas/movimiento
+```
+
+Records a manual cash movement (ingress or egress) on an active session. Use this for petty cash disbursements, cash additions between sessions, or any non-sale/non-agent cash flow that needs to be tracked.
+
+#### Request Body
+
+<ParamField body="tipo" type="string" required>
+  Direction of the cash flow: `INGRESO` (cash in) or `EGRESO` (cash out).
+</ParamField>
+<ParamField body="monto" type="number" required>
+  Amount of the movement. Minimum `0.10`.
+</ParamField>
+<ParamField body="motivo" type="string" required>
+  Reason or description for the movement (e.g., `"Compra de bolsas para empaque"`).
+</ParamField>
+<ParamField body="id_sesion_caja" type="number" required>
+  ID of the active session where this movement is recorded.
+</ParamField>
+<ParamField body="id_user_create" type="number" required>
+  ID of the user recording the movement (audit trail).
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/cajas/movimiento \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "tipo": "EGRESO",
+    "monto": 25.00,
+    "motivo": "Compra de bolsas para empaque",
+    "id_sesion_caja": 101,
+    "id_user_create": 2
+  }'
+```
+
+#### Response — `MovimientoCaja`
+
+<ResponseField name="id" type="number">
+  Unique movement identifier.
+</ResponseField>
+<ResponseField name="tipo" type="string">
+  `"INGRESO"` or `"EGRESO"`.
+</ResponseField>
+<ResponseField name="monto" type="number">
+  Amount of the movement.
+</ResponseField>
+<ResponseField name="motivo" type="string">
+  Reason recorded for the movement.
+</ResponseField>
+<ResponseField name="fecha" type="string">
+  ISO 8601 timestamp of when the movement was registered.
+</ResponseField>
+<ResponseField name="id_sesion_caja" type="number">
+  ID of the session this movement belongs to.
+</ResponseField>
+
+---
+
+## TypeScript Interfaces
+
+```typescript
+interface SesionCaja {
+  id: number;
+  monto_inicial: number;
+  monto_final_teorico: number | null;  // null while session is ABIERTA
+  monto_final_real: number | null;     // null while session is ABIERTA
+  diferencia: number | null;           // null while session is ABIERTA
+  estado_sesion: 'ABIERTA' | 'CERRADA';
+  fecha_apertura: string;              // ISO 8601 timestamp
+  fecha_cierre: string | null;         // null while session is ABIERTA
+  id_caja: number;
+  id_usuario: number;
+}
+
+interface MovimientoCaja {
+  id: number;
+  tipo: 'INGRESO' | 'EGRESO';
+  monto: number;
+  motivo: string;
+  fecha: string;                       // ISO 8601 timestamp
+  id_sesion_caja: number;
+}
+
+interface Caja {
+  id: number;
+  nombre: string;
+  especialidad: 'SOLO_VENTAS' | 'SOLO_AGENTES' | 'MIXTA';
+  saldo: number;
+  sesiones: SesionCaja[];
+}
+```
+
+---
+
+## Role Restrictions Summary
+
+| Endpoint                            | Administrador | Operador |
+| ----------------------------------- | :-----------: | :------: |
+| `GET /cajas`                        | ✅            | ✅       |
+| `POST /cajas`                       | ✅            | ❌       |
+| `GET /cajas/:id`                    | ✅            | ✅       |
+| `PATCH /cajas/:id`                  | ✅            | ✅       |
+| `DELETE /cajas/:id`                 | ✅            | ✅       |
+| `POST /cajas/abrir`                 | ✅            | ✅       |
+| `PATCH /cajas/sesion/:id/cerrar`    | ✅            | ✅       |
+| `GET /cajas/sesion-activa/:id`      | ✅            | ✅       |
+| `GET /cajas/sesion/:id/balance`     | ✅            | ✅       |
+| `POST /cajas/movimiento`            | ✅            | ✅       |

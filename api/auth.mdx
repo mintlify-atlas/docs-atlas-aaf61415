@@ -1,0 +1,599 @@
+---
+title: "Authentication API: Login, Tokens, and Password Reset"
+sidebarTitle: "Auth"
+description: "REST endpoints for JWT login, token refresh, password reset flow, and user account management. Covers public and protected auth routes."
+---
+
+The `/auth` resource is the gateway to the Kantuta POS Backend. It issues short-lived JWT **access tokens** and long-lived **refresh tokens** that your client stores and rotates automatically. The password reset flow is a three-step sequence: request a one-time code by email, verify the code, then submit the new password. Administrative CRUD operations on auth accounts (list, fetch, update, soft-delete) are also exposed under this resource and require a valid Bearer token.
+
+<Info>
+  All endpoints in this section are available at the base URL `http://localhost:3000`. Substitute the production URL as needed.
+</Info>
+
+---
+
+## POST /auth/login
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Authenticates a user with email and password. Returns a short-lived `access_token`, a long-lived `refresh_token`, and the full `Usuario` object including the linked `Persona` and assigned `Role`.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The user's registered email address. Must be a valid email format — e.g. `admin@kantuta.com`.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The user's password as plain text. Transmitted over HTTPS; hashed server-side with bcrypt.
+</ParamField>
+
+### Response
+
+<ResponseField name="access_token" type="string">
+  Short-lived JWT used to authenticate subsequent requests via `Authorization: Bearer <access_token>`.
+</ResponseField>
+
+<ResponseField name="refresh_token" type="string">
+  Long-lived JWT used exclusively with `POST /auth/refresh_token` to obtain a new access token when the current one expires.
+</ResponseField>
+
+<ResponseField name="user" type="Usuario">
+  The authenticated user record, including nested `persona` (personal profile) and `role` objects. See the [Usuario interface](#usuario-typescript-interface) below.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "admin@kantuta.com",
+    "password": "MiClave123!"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "user": {
+    "id": 1,
+    "name": "Admin Kantuta",
+    "email": "admin@kantuta.com",
+    "estado": true,
+    "created_at": "2024-01-15T10:00:00.000Z",
+    "updated_at": "2024-01-15T10:00:00.000Z",
+    "persona": {
+      "id": 1,
+      "nombres": "Carlos",
+      "p_apellido": "Flores",
+      "s_apellido": "Mamani",
+      "fecha_nacimiento": "1990-06-15",
+      "genero": "M",
+      "estado": true,
+      "created_at": "2024-01-15T10:00:00.000Z",
+      "updated_at": "2024-01-15T10:00:00.000Z"
+    },
+    "role": {
+      "id": 1,
+      "nombre": "admin",
+      "descripcion": "Administrador del sistema"
+    }
+  }
+}
+```
+</ResponseExample>
+
+---
+
+## POST /auth/refresh\_token
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Issues a new `access_token` using a valid `refresh_token`. The refresh token is passed in the `Authorization` header — not in the request body. This endpoint does **not** issue a new refresh token; rotate your refresh tokens by re-logging in.
+
+<Warning>
+  Pass the **refresh token** (not the access token) in the `Authorization` header for this endpoint. Using an expired or invalid refresh token returns `401 Unauthorized`.
+</Warning>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  Must be `Bearer <refresh_token>` — the long-lived token received at login.
+</ParamField>
+
+### Response
+
+<ResponseField name="access_token" type="string">
+  A fresh, short-lived JWT to replace the expired access token.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/refresh_token \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+}
+```
+</ResponseExample>
+
+---
+
+## POST /auth/reset/code
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Step 1 of the password reset flow. Sends a **6-character alphanumeric code** to the provided email address. The code is valid for **15 minutes**. After receiving the code, proceed to `POST /auth/confirm-code`.
+
+<Info>
+  The code is generated server-side and stored temporarily. It is case-sensitive and expires automatically after 15 minutes. Request a new code if it expires.
+</Info>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address associated with the account that needs a password reset.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation string, e.g. `"Código de verificación enviado al correo"`.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/reset/code \
+  -H "Content-Type: application/json" \
+  -d '{"email": "usuario@kantuta.com"}'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "message": "Código de verificación enviado al correo"
+}
+```
+</ResponseExample>
+
+---
+
+## POST /auth/confirm-code
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Step 2 of the password reset flow. Verifies that the 6-character code sent by email is valid and has not expired. A successful response allows the client to proceed to `POST /auth/reset-confirm`.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address for which the reset code was requested.
+</ParamField>
+
+<ParamField body="code" type="string" required>
+  The 6-character alphanumeric code received via email — e.g. `A1B2C3`. Case-sensitive.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation string, e.g. `"Código de verificación correcto"`.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/confirm-code \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "usuario@kantuta.com",
+    "code": "A1B2C3"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "message": "Código de verificación correcto"
+}
+```
+</ResponseExample>
+
+---
+
+## POST /auth/reset-confirm
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Step 3 and final step of the password reset flow. Sets a new password for the account after a valid code has been confirmed. Call this only after `POST /auth/confirm-code` succeeds.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address of the account being reset.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The new plain-text password. Hashed server-side before storage. Choose a strong password.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation string, e.g. `"Contraseña actualizada correctamente"`.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/reset-confirm \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "usuario@kantuta.com",
+    "newPassword": "NuevaClave456!"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "message": "Contraseña actualizada correctamente"
+}
+```
+</ResponseExample>
+
+---
+
+## POST /auth/change-password
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Changes the password of any user account directly. This endpoint is for **authenticated administrators** — it does not require the 3-step reset flow. Requires a valid Bearer access token.
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>` — obtained from `POST /auth/login`.
+</ParamField>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address of the account whose password is being changed.
+</ParamField>
+
+<ParamField body="newPassword" type="string" required>
+  The new password in plain text. Will be hashed server-side before storage.
+</ParamField>
+
+### Response
+
+<ResponseField name="message" type="string">
+  Confirmation string on success.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/auth/change-password \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -d '{
+    "email": "operador@kantuta.com",
+    "newPassword": "OtraClave789!"
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "message": "Contraseña cambiada correctamente"
+}
+```
+</ResponseExample>
+
+---
+
+## GET /auth/roles/list
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Returns all available roles defined in the system. Used when assigning roles to new or existing user accounts.
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+### Response
+
+Returns an array of `Role` objects.
+
+<ResponseField name="id" type="number">
+  Unique role identifier.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Role name. Typical values: `"admin"`, `"lider"`, `"user"`.
+</ResponseField>
+
+<ResponseField name="descripcion" type="string">
+  Optional human-readable description of the role's permissions.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/auth/roles/list \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+[
+  { "id": 1, "nombre": "admin", "descripcion": "Administrador del sistema" },
+  { "id": 2, "nombre": "lider", "descripcion": "Líder de turno" },
+  { "id": 3, "nombre": "user", "descripcion": "Cajero estándar" }
+]
+```
+</ResponseExample>
+
+---
+
+## GET /auth
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Returns all auth user account records. Used for administrative account management.
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/auth \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+---
+
+## GET /auth/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Retrieves a single auth user account by its numeric ID.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the auth account to retrieve.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/auth/1 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+---
+
+## PATCH /auth/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Partially updates an auth account. All body fields are optional; only the fields provided will be updated.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the auth account to update.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+### Request body (`UpdateAuthDto` — all fields optional)
+
+<ParamField body="name" type="string">
+  Display name for the account.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated email address. Must be unique across all accounts.
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password in plain text. Hashed server-side before storage.
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Account active/inactive flag.
+</ParamField>
+
+<RequestExample>
+```bash cURL
+curl -X PATCH http://localhost:3000/auth/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -d '{"name": "Carlos Administrador"}'
+```
+</RequestExample>
+
+---
+
+## DELETE /auth/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Soft-deletes an auth account by setting its `estado` field to `false`. The record remains in the database for audit purposes.
+
+<Warning>
+  This is a soft delete. The account is deactivated, not permanently removed. Deactivated accounts cannot log in.
+</Warning>
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the auth account to deactivate.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+<RequestExample>
+```bash cURL
+curl -X DELETE http://localhost:3000/auth/5 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+---
+
+## Axios Integration (React + TypeScript)
+
+The following setup creates an Axios instance that automatically injects the access token on every request and transparently refreshes it when a `401` response is received. Copy this into your frontend project (e.g. `src/lib/api.ts`).
+
+```typescript
+import axios from 'axios';
+
+// 1. Create the Axios instance
+const api = axios.create({
+  baseURL: 'http://localhost:3000',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// 2. Inject the access token on every outgoing request
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('access_token');
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error),
+);
+
+// 3. Auto-refresh the access token on 401 responses
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+      try {
+        const refreshToken = localStorage.getItem('refresh_token');
+
+        // Call refresh endpoint directly (bypassing the request interceptor)
+        const res = await axios.post(
+          'http://localhost:3000/auth/refresh_token',
+          {},
+          { headers: { Authorization: `Bearer ${refreshToken}` } },
+        );
+
+        const newAccessToken: string = res.data.access_token;
+        localStorage.setItem('access_token', newAccessToken);
+
+        // Retry the original request with the new access token
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        // Refresh token also expired — force re-login
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        window.location.href = '/login';
+        return Promise.reject(refreshError);
+      }
+    }
+    return Promise.reject(error);
+  },
+);
+
+export default api;
+```
+
+### Login helper
+
+```typescript
+import api from './api';
+import { Usuario } from './types';
+
+interface LoginResponse {
+  access_token: string;
+  refresh_token: string;
+  user: Usuario;
+}
+
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  const { data } = await api.post<LoginResponse>('/auth/login', { email, password });
+  localStorage.setItem('access_token', data.access_token);
+  localStorage.setItem('refresh_token', data.refresh_token);
+  return data;
+}
+```
+
+---
+
+## TypeScript Interfaces
+
+```typescript
+export interface Role {
+  id: number;
+  nombre: 'admin' | 'lider' | 'user' | string;
+  descripcion?: string;
+}
+
+export interface BaseEntityAudit {
+  estado: boolean;
+  id_user_create: number | null;
+  id_user_update?: number | null;
+  created_at: string; // ISO 8601
+  updated_at: string; // ISO 8601
+}
+
+export interface Persona extends BaseEntityAudit {
+  id: number;
+  nombres: string;
+  p_apellido: string;
+  s_apellido?: string;
+  fecha_nacimiento: string; // YYYY-MM-DD
+  genero: string;           // 'M' | 'F'
+}
+
+export interface Usuario extends BaseEntityAudit {
+  id: number;
+  name: string;
+  email: string;
+  persona: Persona;
+  role: Role;
+}
+```

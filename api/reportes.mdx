@@ -1,0 +1,513 @@
+---
+title: "Reportes API: Dashboard Statistics and Report Data"
+sidebarTitle: "Reportes"
+description: "REST endpoints for dashboard KPIs, sales and purchase ranges, inventory snapshots, operator productivity, and cash movement data for PDF generation."
+---
+
+The Reportes module provides structured JSON payloads purpose-built for two use cases: real-time dashboard charts and PDF-ready report data. Every response is pre-aggregated on the server — totals, breakdowns, and rankings are computed by the API so the frontend can pass the data straight to a charting library or a PDF renderer without additional transformation. All endpoints in this module require a valid `Authorization: Bearer <access_token>` header.
+
+---
+
+## Dashboard statistics
+
+```
+GET /reportes/dashboard-stats
+```
+
+Returns a consolidated KPI snapshot for the main dashboard: today's sales and recharge totals, a low-stock product count, a 12-month bar chart series, a top-5 best-seller ranking, and a monthly recharge distribution breakdown by carrier.
+
+### Query parameters
+
+<ParamField query="anio" type="number">
+  Four-digit year used to group the monthly sales series (e.g. `2025`). Defaults to the current calendar year when omitted. Non-numeric values are silently coerced to the current year.
+</ParamField>
+
+### Response
+
+<ResponseField name="kpis" type="object">
+  Real-time KPI counters for today.
+
+  <Expandable title="KPI fields">
+    <ResponseField name="ventas_hoy" type="number">
+      Total revenue from completed sales (`estado_venta = 'COMPLETADA'`) created today (local midnight to 23:59:59).
+    </ResponseField>
+    <ResponseField name="recargas_hoy" type="number">
+      Total amount of mobile top-up transactions (`RecargaCliente`) processed today.
+    </ResponseField>
+    <ResponseField name="ganancia_comisiones_hoy" type="number">
+      Commission earnings today. Returns `0` (feature reserved for a future release).
+    </ResponseField>
+    <ResponseField name="productos_stock_bajo" type="number">
+      Count of active products where `stock_actual <= stock_minimo`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="ventas_mensuales" type="array">
+  12-element array — one entry per calendar month — for the requested `anio`. Months with no completed sales have `total: 0`.
+
+  <Expandable title="Monthly entry">
+    <ResponseField name="mes" type="string">
+      Three-letter Spanish month abbreviation: `"Ene"`, `"Feb"`, … `"Dic"`.
+    </ResponseField>
+    <ResponseField name="total" type="number">
+      Sum of completed sale totals for that month.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="top_productos" type="array">
+  Top 5 products ranked by total units sold across all time (completed sales only).
+
+  <Expandable title="Product entry">
+    <ResponseField name="nombre" type="string">
+      Product name.
+    </ResponseField>
+    <ResponseField name="cantidad" type="number">
+      Total units sold.
+    </ResponseField>
+    <ResponseField name="ganancia" type="number">
+      Gross profit: `SUM(subtotal) - SUM(cantidad × costo_compra)`.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="recargas_distribucion" type="array">
+  Monthly recharge revenue split by carrier — always returns exactly three entries: `Entel`, `Viva`, and `Tigo`. Carriers with no transactions in the current month have `total: 0`.
+
+  <Expandable title="Carrier entry">
+    <ResponseField name="proveedor" type="string">
+      Carrier name (`"Entel"`, `"Viva"`, or `"Tigo"`).
+    </ResponseField>
+    <ResponseField name="total" type="number">
+      Sum of recharge amounts for the current calendar month.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl https://api.kantutapos.com/api/reportes/dashboard-stats?anio=2025 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+```json
+{
+  "kpis": {
+    "ventas_hoy": 1540.50,
+    "recargas_hoy": 320.00,
+    "ganancia_comisiones_hoy": 0,
+    "productos_stock_bajo": 3
+  },
+  "ventas_mensuales": [
+    { "mes": "Ene", "total": 12300.00 },
+    { "mes": "Feb", "total": 9800.50 },
+    { "mes": "Mar", "total": 15200.75 },
+    { "mes": "Abr", "total": 11050.00 },
+    { "mes": "May", "total": 18400.00 },
+    { "mes": "Jun", "total": 0 },
+    { "mes": "Jul", "total": 0 },
+    { "mes": "Ago", "total": 0 },
+    { "mes": "Sep", "total": 0 },
+    { "mes": "Oct", "total": 0 },
+    { "mes": "Nov", "total": 0 },
+    { "mes": "Dic", "total": 0 }
+  ],
+  "top_productos": [
+    { "nombre": "Coca Cola 2L", "cantidad": 340, "ganancia": 510.00 },
+    { "nombre": "Aceite Fino 1L", "cantidad": 210, "ganancia": 315.00 }
+  ],
+  "recargas_distribucion": [
+    { "proveedor": "Entel", "total": 1200.00 },
+    { "proveedor": "Viva",  "total": 750.00 },
+    { "proveedor": "Tigo",  "total": 430.00 }
+  ]
+}
+```
+
+---
+
+## Sales range report
+
+```
+GET /reportes/data/ventas-rango
+```
+
+Returns a financial summary and itemized list of sales for a date range. Designed to feed PDF report generators — the response includes pre-computed payment-method breakdowns so no further aggregation is needed client-side.
+
+### Query parameters
+
+<ParamField query="fechaInicio" type="string" required>
+  Range start date in ISO 8601 format (`YYYY-MM-DD`). Internally set to `00:00:00` local time.
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  Range end date in ISO 8601 format (`YYYY-MM-DD`). Internally set to `23:59:59.999` local time.
+</ParamField>
+
+<ParamField query="auditor" type="string" required>
+  Name of the person requesting the report — embedded in the PDF header by the frontend renderer.
+</ParamField>
+
+### Response
+
+<ResponseField name="totales" type="object">
+  Aggregated totals for the requested range (only `COMPLETADA` and `EDITADA` sales are counted).
+
+  <Expandable title="Totals fields">
+    <ResponseField name="totalVendido" type="number">
+      Sum of all completed/edited sale totals.
+    </ResponseField>
+    <ResponseField name="totalTransacciones" type="number">
+      Total count of sale records in the date range (all statuses).
+    </ResponseField>
+    <ResponseField name="desglose.efectivo" type="number">
+      Revenue from cash (`EFECTIVO`) payments.
+    </ResponseField>
+    <ResponseField name="desglose.qr" type="number">
+      Revenue from QR code payments.
+    </ResponseField>
+    <ResponseField name="desglose.transferencia" type="number">
+      Revenue from bank transfer payments.
+    </ResponseField>
+    <ResponseField name="desglose.digitalTotal" type="number">
+      Combined QR + transfer revenue.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="ventas" type="array">
+  Ordered list of individual sales (most recent first).
+
+  <Expandable title="Sale entry">
+    <ResponseField name="id" type="number">Sale ID.</ResponseField>
+    <ResponseField name="fecha" type="string">ISO 8601 timestamp of the sale.</ResponseField>
+    <ResponseField name="total" type="number">Sale total amount.</ResponseField>
+    <ResponseField name="metodo_pago" type="string">`"EFECTIVO"`, `"QR"`, or `"TRANSFERENCIA"`.</ResponseField>
+    <ResponseField name="estado_venta" type="string">`"COMPLETADA"`, `"EDITADA"`, or `"ANULADA"`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+```bash
+curl "https://api.kantutapos.com/api/reportes/data/ventas-rango?fechaInicio=2025-05-01&fechaFin=2025-05-31&auditor=Gerente+General" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## Purchases range report
+
+```
+GET /reportes/data/compras-rango
+```
+
+Returns all purchase records within a date range along with the total capital invested. Mirrors the sales range endpoint but queries the `Compra` entity.
+
+### Query parameters
+
+<ParamField query="fechaInicio" type="string" required>
+  Range start date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  Range end date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField query="auditor" type="string" required>
+  Auditor name embedded in the report metadata.
+</ParamField>
+
+### Response
+
+<ResponseField name="fechaInicio" type="string">Start date echoed back.</ResponseField>
+<ResponseField name="fechaFin" type="string">End date echoed back.</ResponseField>
+<ResponseField name="auditor" type="string">Auditor name echoed back.</ResponseField>
+<ResponseField name="fechaEmision" type="string">ISO 8601 timestamp of when the report was generated.</ResponseField>
+<ResponseField name="compras" type="array">
+  List of purchase records (most recent first).
+
+  <Expandable title="Purchase entry">
+    <ResponseField name="id" type="number">Purchase ID.</ResponseField>
+    <ResponseField name="fecha" type="string">Purchase date.</ResponseField>
+    <ResponseField name="proveedor" type="string">Supplier name, or `"Sin Proveedor"` if not recorded.</ResponseField>
+    <ResponseField name="pagado_con_caja" type="boolean">Whether the purchase was paid from the cash register.</ResponseField>
+    <ResponseField name="total" type="number">Total purchase amount.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="totalInvertido" type="number">
+  Sum of all purchase totals in the range.
+</ResponseField>
+
+---
+
+## Inventory snapshot
+
+```
+GET /reportes/data/inventario
+```
+
+Returns the current state of all active products — cost basis, sale price, current stock, and a low-stock flag — plus a financial summary of the inventory's total value.
+
+### Query parameters
+
+<ParamField query="auditor" type="string" required>
+  Auditor name included in the report metadata for traceability.
+</ParamField>
+
+### Response
+
+<ResponseField name="fechaCorte" type="string">
+  ISO 8601 timestamp of when the snapshot was taken.
+</ResponseField>
+
+<ResponseField name="auditor" type="string">
+  Auditor name echoed back.
+</ResponseField>
+
+<ResponseField name="productos" type="array">
+  All active products, ordered by `stock_actual` ascending (lowest stock first).
+
+  <Expandable title="Product entry">
+    <ResponseField name="codigo_barras" type="string">Barcode, or `"-"` if not assigned.</ResponseField>
+    <ResponseField name="nombre" type="string">Product name.</ResponseField>
+    <ResponseField name="categoria" type="string">Category name, or `"-"` if uncategorized.</ResponseField>
+    <ResponseField name="stock_actual" type="number">Current units on hand.</ResponseField>
+    <ResponseField name="bajoStock" type="boolean">`true` if `stock_actual <= stock_minimo`.</ResponseField>
+    <ResponseField name="costo" type="number">Unit purchase cost.</ResponseField>
+    <ResponseField name="precio" type="number">Unit sale price.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="resumen" type="object">
+  Inventory financial summary.
+
+  <Expandable title="Summary fields">
+    <ResponseField name="itemsBajoStock" type="number">Count of products at or below their minimum stock level.</ResponseField>
+    <ResponseField name="totalCosto" type="number">Total inventory value at cost (`SUM(costo × stock_actual)`).</ResponseField>
+    <ResponseField name="totalPrecio" type="number">Total inventory value at sale price (`SUM(precio × stock_actual)`).</ResponseField>
+    <ResponseField name="gananciaProyectada" type="number">Projected gross profit if all current stock were sold (`totalPrecio - totalCosto`).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Operator productivity report
+
+```
+GET /reportes/data/productividad-operador
+```
+
+Aggregates completed sales by operator (the user who created each sale) for a given date range. Returns a ranked list of operators sorted by total amount billed, descending. Useful for performance reviews and commission calculations.
+
+### Query parameters
+
+<ParamField query="fechaInicio" type="string" required>
+  Range start date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField query="fechaFin" type="string" required>
+  Range end date (`YYYY-MM-DD`).
+</ParamField>
+
+<ParamField query="operadorId" type="number">
+  Optional. Filter results to a single operator by their user ID. Omit to return all operators.
+</ParamField>
+
+### Response
+
+<ResponseField name="fechaInicio" type="string">Start date echoed back.</ResponseField>
+<ResponseField name="fechaFin" type="string">End date echoed back.</ResponseField>
+<ResponseField name="fechaEmision" type="string">ISO 8601 timestamp of report generation.</ResponseField>
+
+<ResponseField name="operadores" type="array">
+  Ranked list of operators (highest billed first).
+
+  <Expandable title="Operator entry">
+    <ResponseField name="operador" type="string">Operator's full name from the `Usuario` entity.</ResponseField>
+    <ResponseField name="cantidad_ventas" type="number">Number of completed sales attributed to this operator.</ResponseField>
+    <ResponseField name="total_facturado" type="number">Total revenue from the operator's completed sales.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Cash session movements
+
+```
+GET /reportes/data/movimientos-caja/:idSesion
+```
+
+Returns the complete movement log for a specific cash register session, including INGRESO/EGRESO entries and pre-computed net totals. Throws `404` if the session ID does not exist.
+
+### Path parameters
+
+<ParamField path="idSesion" type="number" required>
+  Numeric ID of the `SesionCaja` record (e.g. `42`).
+</ParamField>
+
+### Response
+
+<ResponseField name="sesion" type="object">
+  Session metadata.
+
+  <Expandable title="Session fields">
+    <ResponseField name="id" type="number">Session ID.</ResponseField>
+    <ResponseField name="cajaNombre" type="string">Name of the cash register.</ResponseField>
+    <ResponseField name="fechaApertura" type="string">Session open timestamp.</ResponseField>
+    <ResponseField name="fechaCierre" type="string">Session close timestamp, or `null` if still open.</ResponseField>
+    <ResponseField name="montoInicial" type="number">Opening float amount.</ResponseField>
+    <ResponseField name="saldoActualTeorico" type="number">Current theoretical balance from the `Caja` entity.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="movimientos" type="array">
+  All active movements for this session, ordered chronologically.
+
+  <Expandable title="Movement entry">
+    <ResponseField name="id" type="number">Movement ID.</ResponseField>
+    <ResponseField name="fecha" type="string">Movement timestamp.</ResponseField>
+    <ResponseField name="tipo" type="string">`"INGRESO"` or `"EGRESO"`.</ResponseField>
+    <ResponseField name="motivo" type="string">Description of the movement (e.g. `"Pago a proveedor"`).</ResponseField>
+    <ResponseField name="monto" type="number">Amount of the movement.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="totales" type="object">
+  <Expandable title="Totals fields">
+    <ResponseField name="ingresos" type="number">Sum of all INGRESO movements.</ResponseField>
+    <ResponseField name="egresos" type="number">Sum of all EGRESO movements.</ResponseField>
+    <ResponseField name="neto" type="number">Net cash flow: `ingresos - egresos`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## Single sale receipt
+
+```
+GET /reportes/data/venta/:id
+```
+
+Returns all data required to render a receipt PDF for one completed sale: line items, unit prices, subtotals, payment method, and the operator who processed it. Throws `404` if the sale ID does not exist.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the `Venta` record (e.g. `1042`).
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="number">Sale ID.</ResponseField>
+<ResponseField name="fecha" type="string">ISO 8601 sale timestamp.</ResponseField>
+<ResponseField name="cajero" type="string">Name of the operator who processed the sale, or `"Sistema"` if the user record is unavailable.</ResponseField>
+<ResponseField name="metodo_pago" type="string">`"EFECTIVO"`, `"QR"`, or `"TRANSFERENCIA"`.</ResponseField>
+<ResponseField name="estado_venta" type="string">Final status: `"COMPLETADA"`, `"EDITADA"`, or `"ANULADA"`.</ResponseField>
+<ResponseField name="detalles" type="array">
+  Line items of the sale.
+
+  <Expandable title="Line item">
+    <ResponseField name="nombre" type="string">Product name.</ResponseField>
+    <ResponseField name="cantidad" type="number">Units sold.</ResponseField>
+    <ResponseField name="precio_unitario" type="number">Unit price at time of sale.</ResponseField>
+    <ResponseField name="subtotal" type="number">Line total (`precio_unitario × cantidad`).</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total" type="number">Sale grand total.</ResponseField>
+
+---
+
+## Product data sheet
+
+```
+GET /reportes/data/producto/:id
+```
+
+Returns a product information sheet suitable for a PDF catalog or inventory printout. Throws `404` if the product ID does not exist.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the `Producto` record.
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="number">Product ID.</ResponseField>
+<ResponseField name="nombre" type="string">Product name.</ResponseField>
+<ResponseField name="codigo_barras" type="string">Barcode string, or `null` if not assigned.</ResponseField>
+<ResponseField name="categoria" type="string">Category name, or `"Sin categoría"`.</ResponseField>
+<ResponseField name="stock_actual" type="number">Current units on hand.</ResponseField>
+<ResponseField name="stock_minimo" type="number">Reorder threshold.</ResponseField>
+<ResponseField name="precio_venta" type="number">Current sale price.</ResponseField>
+<ResponseField name="costo_compra" type="number">Current purchase cost.</ResponseField>
+<ResponseField name="fecha_ingreso" type="string">ISO 8601 timestamp of when the product was first created.</ResponseField>
+
+---
+
+## Cash register history extract
+
+```
+GET /reportes/data/caja-historial/:id
+```
+
+Returns a full chronological movement history across **all sessions** for a given cash register. Unlike `/movimientos-caja/:idSesion` (which scopes to one session), this endpoint aggregates every movement ever recorded for the register. Throws `404` if no movements exist for the given caja ID.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the `Caja` entity (the physical register), not a session ID.
+</ParamField>
+
+### Response
+
+<ResponseField name="caja" type="object">
+  <Expandable title="Caja fields">
+    <ResponseField name="id" type="number">Caja ID.</ResponseField>
+    <ResponseField name="nombre" type="string">Register name.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="movimientos" type="array">
+  All movements across all sessions for this register, ordered by date ascending.
+
+  <Expandable title="Movement entry">
+    <ResponseField name="id" type="number">Movement ID.</ResponseField>
+    <ResponseField name="fecha" type="string">Movement timestamp.</ResponseField>
+    <ResponseField name="id_sesion" type="number">ID of the session this movement belongs to.</ResponseField>
+    <ResponseField name="tipo" type="string">`"INGRESO"` or `"EGRESO"`.</ResponseField>
+    <ResponseField name="motivo" type="string">Description of the movement.</ResponseField>
+    <ResponseField name="monto" type="number">Movement amount.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="totales" type="object">
+  <Expandable title="Totals fields">
+    <ResponseField name="ingresos" type="number">Lifetime sum of all INGRESO movements.</ResponseField>
+    <ResponseField name="egresos" type="number">Lifetime sum of all EGRESO movements.</ResponseField>
+    <ResponseField name="neto" type="number">`ingresos - egresos`.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+---
+
+## PDF generation tips
+
+<Tip>
+  All `/reportes/data/*` endpoints return self-contained JSON objects — no secondary requests needed. Pass the response directly to your PDF library:
+
+  - **jsPDF + AutoTable** — map `ventas` or `movimientos` arrays to table rows
+  - **Puppeteer** — render an HTML template server-side, inject JSON data, then print to PDF
+  - **react-pdf / @react-pdf/renderer** — use the response as props to a `<Document>` component on the frontend
+
+  The `auditor` and `fechaEmision` fields are intentionally included in each response so they can be stamped on the report header without any additional API calls.
+</Tip>
+
+<Note>
+  `POST /ventas/reporte-resumen` (in the Ventas module) provides an alternative grouped financial summary for a date range with subtotals by payment method. Use it when you need a high-level executive summary rather than the full transaction list returned by `/reportes/data/ventas-rango`.
+</Note>

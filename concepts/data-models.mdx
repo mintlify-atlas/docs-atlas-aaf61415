@@ -1,0 +1,463 @@
+---
+title: "Core Data Models and TypeScript Interfaces"
+sidebarTitle: "Data Models"
+description: "Complete TypeScript interface reference for all Kantuta POS entities: users, products, sales, cash registers, agent transactions, purchases, and recargas."
+---
+
+Every resource in the Kantuta POS API maps directly to a TypeORM entity backed by a PostgreSQL table. This page documents the shape of each entity as a **TypeScript interface** so your frontend can consume the API with full type safety. Copy the interfaces at the bottom of this page into a `src/types/api.d.ts` file in your React project — they reflect the actual JSON shapes returned by every endpoint, including all nested relations.
+
+---
+
+## BaseEntityAudit
+
+Almost every entity in the system extends `BaseEntityAudit`. These fields are present on every response object unless explicitly excluded:
+
+```typescript
+export interface BaseEntityAudit {
+  estado: boolean;               // true = active, false = soft-deleted
+  id_user_create: number | null; // ID of the user who created the record
+  id_user_update?: number | null;// ID of the user who last updated it
+  created_at: string;            // ISO 8601 timestamp
+  updated_at: string;            // ISO 8601 timestamp (auto-updated)
+}
+```
+
+<Note>
+  **Soft delete:** All entities with `estado: boolean` use `false` to mark a record as deleted rather than physically removing it. Always filter for `estado === true` when displaying lists to users.
+</Note>
+
+| Field | Description |
+|---|---|
+| `estado` | Active flag. `true` = visible/active; `false` = soft-deleted |
+| `id_user_create` | Audit field — who created this record |
+| `id_user_update` | Audit field — who last modified this record |
+| `created_at` | Auto-set by TypeORM `@CreateDateColumn` |
+| `updated_at` | Auto-updated by TypeORM `@UpdateDateColumn` on every save |
+
+---
+
+## Identity & Access
+
+<Accordion title="Role — User roles">
+  Defines the authorization level of a user account.
+
+  ```typescript
+  export interface Role {
+    id: number;
+    nombre: 'admin' | 'user' | string; // 'Administrador' or 'Operador' in practice
+    descripcion?: string;
+  }
+  ```
+
+  | Field | Notes |
+  |---|---|
+  | `id` | `1` = Administrador, `2` = Operador |
+  | `nombre` | Used by `RolesGuard` for authorization checks |
+</Accordion>
+
+<Accordion title="Persona — Natural person profile">
+  Stores the personal identity information linked to a user account.
+
+  ```typescript
+  export interface Persona extends BaseEntityAudit {
+    id: number;
+    nombres: string;
+    p_apellido: string;
+    s_apellido?: string;
+    fecha_nacimiento: string; // Format: "YYYY-MM-DD"
+    genero: string;           // "M" | "F"
+  }
+  ```
+
+  | Field | Notes |
+  |---|---|
+  | `p_apellido` | First (paternal) surname |
+  | `s_apellido` | Second (maternal) surname — optional |
+  | `fecha_nacimiento` | ISO date string without time component |
+</Accordion>
+
+<Accordion title="Usuario — System user account">
+  Represents an operator or administrator who can log in and use the POS.
+
+  ```typescript
+  export interface Usuario extends BaseEntityAudit {
+    id: number;
+    name: string;     // Display name
+    email: string;
+    persona: Persona;
+    role: Role;
+    // password is @Exclude() — never returned by the API
+  }
+  ```
+
+  <Note>
+    The `password` field is excluded from all API responses by the global `ClassSerializerInterceptor`. You will never receive it in JSON.
+  </Note>
+</Accordion>
+
+---
+
+## Inventory
+
+<Accordion title="Categoria — Product category">
+  Groups products into logical categories for filtering and reporting.
+
+  ```typescript
+  export interface Categoria extends BaseEntityAudit {
+    id: number;
+    nombre: string;
+    productos?: Producto[]; // Populated when fetching a single category
+  }
+  ```
+</Accordion>
+
+<Accordion title="Producto — Inventory product">
+  Represents a sellable item with pricing, stock levels, and barcode information.
+
+  ```typescript
+  export interface Producto extends BaseEntityAudit {
+    id: number;
+    nombre: string;
+    codigo_barras: string | null; // EAN/UPC barcode — nullable
+    precio_venta: number;         // Sale price (decimal, 12,2)
+    costo_compra: number;         // Acquisition cost (decimal, 12,2)
+    stock_actual: number;         // Current units on shelf (int)
+    stock_minimo: number;         // Minimum before restock alert (int, default 3)
+    categoria: Categoria;         // Eagerly loaded — always present
+  }
+  ```
+
+  | Field | Notes |
+  |---|---|
+  | `codigo_barras` | Optional — used for barcode scanner lookups at the POS terminal |
+  | `stock_minimo` | When `stock_actual` drops below this, a low-stock alert is triggered |
+  | `categoria` | Loaded eagerly via `{ eager: true }` — no separate query needed |
+</Accordion>
+
+---
+
+## Cash Registers
+
+<Accordion title="Caja — Physical cash drawer">
+  Represents a physical POS terminal/cash drawer. Each caja has a defined specialty that restricts what operations it can process.
+
+  ```typescript
+  export interface Caja extends BaseEntityAudit {
+    id: number;
+    nombre: string;
+    especialidad: 'SOLO_VENTAS' | 'SOLO_AGENTES' | 'MIXTA';
+    saldo: number;           // Base balance (decimal, 10,2)
+    sesiones?: SesionCaja[]; // Historical sessions — populated on GET :id
+  }
+  ```
+
+  | `especialidad` value | Allowed operations |
+  |---|---|
+  | `SOLO_VENTAS` | Product sales only |
+  | `SOLO_AGENTES` | External agent transactions only |
+  | `MIXTA` | Both sales and agent transactions |
+</Accordion>
+
+<Accordion title="SesionCaja — Shift session">
+  Represents one cashier's open shift on a specific `Caja`. Opens with an initial float and closes after reconciliation.
+
+  ```typescript
+  export interface SesionCaja extends BaseEntityAudit {
+    id: number;
+    monto_inicial: number;          // Opening float (decimal, 12,2)
+    monto_final_teorico: number | null; // System-calculated expected closing balance
+    monto_final_real: number | null;    // Physical cash counted by cashier
+    diferencia: number | null;          // monto_final_real - monto_final_teorico
+    estado_sesion: 'ABIERTA' | 'CERRADA';
+    fecha_apertura: string;         // ISO timestamp — when shift opened
+    fecha_cierre: string | null;    // ISO timestamp — when shift closed
+    id_caja: number;
+    caja?: Caja;                    // Populated on detail fetch
+    id_usuario: number;             // ID of the cashier operating this session
+  }
+  ```
+
+  | Field | Notes |
+  |---|---|
+  | `monto_final_teorico` | Calculated by the backend: initial float + all `INGRESO` movements − all `EGRESO` movements |
+  | `diferencia` | Positive = overage (surplus cash); negative = shortage |
+</Accordion>
+
+<Accordion title="MovimientoCaja — Cash movement">
+  Records a manual cash-in or cash-out event within an open session (e.g., petty cash withdrawal, cash received for float top-up).
+
+  ```typescript
+  export interface MovimientoCaja extends BaseEntityAudit {
+    id: number;
+    tipo: 'INGRESO' | 'EGRESO';
+    monto: number;          // Minimum 0.10 (decimal)
+    motivo: string;         // Human-readable reason for the movement
+    fecha: string;          // ISO timestamp
+    id_sesion_caja: number;
+  }
+  ```
+</Accordion>
+
+---
+
+## Sales & Purchases
+
+<Accordion title="DetalleVenta — Sale line item">
+  One product line within a sale. The backend calculates `subtotal = cantidad × precio_unitario` and reduces `stock_actual` of the referenced product automatically.
+
+  ```typescript
+  export interface DetalleVenta extends BaseEntityAudit {
+    id: number;
+    cantidad: number;
+    precio_unitario: number; // Unit price at time of sale (decimal, 12,2)
+    subtotal: number;        // cantidad × precio_unitario (decimal, 12,2)
+    id_venta: number;
+    id_producto: number;
+    producto?: Producto;     // Populated in sale detail responses
+  }
+  ```
+</Accordion>
+
+<Accordion title="Venta — Sale transaction">
+  A complete point-of-sale transaction, containing one or more `DetalleVenta` line items.
+
+  ```typescript
+  export interface Venta extends BaseEntityAudit {
+    id: number;
+    total: number;                       // Sum of all subtotals (decimal, 12,2)
+    metodo_pago: 'EFECTIVO' | 'QR' | 'TRANSFERENCIA';
+    fecha: string;                       // Auto-set ISO timestamp
+    id_sesion_caja: number;
+    estado_venta: 'COMPLETADA' | 'ANULADA' | 'EDITADA';
+    motivo_edicion: string | null;       // Required when estado_venta = 'EDITADA'
+    fecha_modificacion: string;          // Auto-updated ISO timestamp
+    detalles: DetalleVenta[];
+  }
+  ```
+
+  | `estado_venta` value | Meaning |
+  |---|---|
+  | `COMPLETADA` | Sale processed successfully — stock already reduced |
+  | `ANULADA` | Sale voided — stock is **not** automatically restored via this field |
+  | `EDITADA` | Sale was modified after creation — `motivo_edicion` is required |
+</Accordion>
+
+<Accordion title="DetalleCompra — Purchase line item">
+  One product line within a supplier purchase. The backend increases `stock_actual` and updates `costo_compra` on the referenced product.
+
+  ```typescript
+  export interface DetalleCompra extends BaseEntityAudit {
+    id: number;
+    cantidad: number;
+    costo_unitario: number; // Unit cost at time of purchase (decimal)
+    subtotal: number;       // cantidad × costo_unitario
+    id_producto: number;
+    producto?: Producto;    // Populated in purchase detail responses
+  }
+  ```
+</Accordion>
+
+<Accordion title="Compra — Supplier purchase">
+  Records the acquisition of stock from a supplier. If `pagado_con_caja` is `true`, an `EGRESO` `MovimientoCaja` is automatically created in the linked session.
+
+  ```typescript
+  export interface Compra extends BaseEntityAudit {
+    id: number;
+    total: number;
+    proveedor: string | null;          // Supplier name — optional
+    pagado_con_caja: boolean;          // Whether payment came from the cash drawer
+    id_sesion_caja: number | null;     // Required when pagado_con_caja is true
+    fecha: string;                     // ISO timestamp
+    detalles: DetalleCompra[];
+  }
+  ```
+</Accordion>
+
+---
+
+## Agents & Recargas
+
+<Accordion title="TransaccionAgente — Financial agent operation">
+  Records an external financial service operation (mobile money, QR payment, bank transfer) handled through the POS terminal acting as a financial agent.
+
+  ```typescript
+  export interface TransaccionAgente extends BaseEntityAudit {
+    id: number;
+    banco: string;                            // e.g. "TIGO_MONEY", "BCP", "BANCO_UNION"
+    tipo_operacion: 'DEPOSITO' | 'RETIRO' | 'TRANSFERENCIA_QR';
+    monto: number;                            // Transaction amount (minimum 1)
+    comision_cliente: number;                 // Fee charged to the customer
+    comision_banco: number;                   // Fee paid to the bank/provider
+    nro_referencia: string;                   // Unique bank reference code
+    url_comprobante: string | null;           // URL to receipt image — optional
+    fecha: string;                            // ISO timestamp
+    id_sesion_caja: number;
+  }
+  ```
+
+  | `tipo_operacion` value | Description |
+  |---|---|
+  | `DEPOSITO` | Customer deposits cash through the agent |
+  | `RETIRO` | Customer withdraws cash through the agent |
+  | `TRANSFERENCIA_QR` | QR-based transfer processed at the terminal |
+</Accordion>
+
+---
+
+## Complete TypeScript Interface File
+
+Copy the block below into `src/types/api.d.ts` in your frontend project for full end-to-end type coverage:
+
+```typescript
+// src/types/api.d.ts
+// Auto-generated from Kantuta POS Backend entity definitions
+
+export interface BaseEntityAudit {
+  estado: boolean;
+  id_user_create: number | null;
+  id_user_update?: number | null;
+  created_at: string; // ISO Date String
+  updated_at: string; // ISO Date String
+}
+
+// ── Identity & Access ──────────────────────────────────────────────────────
+
+export interface Role {
+  id: number;
+  nombre: 'admin' | 'user' | string;
+  descripcion?: string;
+}
+
+export interface Persona extends BaseEntityAudit {
+  id: number;
+  nombres: string;
+  p_apellido: string;
+  s_apellido?: string;
+  fecha_nacimiento: string; // Format: "YYYY-MM-DD"
+  genero: string;           // "M" | "F"
+}
+
+export interface Usuario extends BaseEntityAudit {
+  id: number;
+  name: string;
+  email: string;
+  persona: Persona;
+  role: Role;
+}
+
+// ── Inventory ──────────────────────────────────────────────────────────────
+
+export interface Categoria extends BaseEntityAudit {
+  id: number;
+  nombre: string;
+  productos?: Producto[];
+}
+
+export interface Producto extends BaseEntityAudit {
+  id: number;
+  nombre: string;
+  codigo_barras: string | null;
+  precio_venta: number;
+  costo_compra: number;
+  stock_actual: number;
+  stock_minimo: number;
+  categoria: Categoria;
+}
+
+// ── Cash Registers ─────────────────────────────────────────────────────────
+
+export interface Caja extends BaseEntityAudit {
+  id: number;
+  nombre: string;
+  especialidad: 'SOLO_VENTAS' | 'SOLO_AGENTES' | 'MIXTA';
+  saldo: number;
+  sesiones?: SesionCaja[];
+}
+
+export interface SesionCaja extends BaseEntityAudit {
+  id: number;
+  monto_inicial: number;
+  monto_final_teorico: number | null;
+  monto_final_real: number | null;
+  diferencia: number | null;
+  estado_sesion: 'ABIERTA' | 'CERRADA';
+  fecha_apertura: string;
+  fecha_cierre: string | null;
+  id_caja: number;
+  caja?: Caja;
+  id_usuario: number;
+}
+
+export interface MovimientoCaja extends BaseEntityAudit {
+  id: number;
+  tipo: 'INGRESO' | 'EGRESO';
+  monto: number;
+  motivo: string;
+  fecha: string;
+  id_sesion_caja: number;
+}
+
+// ── Sales ──────────────────────────────────────────────────────────────────
+
+export interface DetalleVenta extends BaseEntityAudit {
+  id: number;
+  cantidad: number;
+  precio_unitario: number;
+  subtotal: number;
+  id_venta: number;
+  id_producto: number;
+  producto?: Producto;
+}
+
+export interface Venta extends BaseEntityAudit {
+  id: number;
+  total: number;
+  metodo_pago: 'EFECTIVO' | 'QR' | 'TRANSFERENCIA';
+  fecha: string;
+  id_sesion_caja: number;
+  estado_venta: 'COMPLETADA' | 'ANULADA' | 'EDITADA';
+  motivo_edicion: string | null;
+  fecha_modificacion: string;
+  detalles: DetalleVenta[];
+}
+
+// ── Purchases ──────────────────────────────────────────────────────────────
+
+export interface DetalleCompra extends BaseEntityAudit {
+  id: number;
+  cantidad: number;
+  costo_unitario: number;
+  subtotal: number;
+  id_producto: number;
+  producto?: Producto;
+}
+
+export interface Compra extends BaseEntityAudit {
+  id: number;
+  total: number;
+  proveedor: string | null;
+  pagado_con_caja: boolean;
+  id_sesion_caja: number | null;
+  fecha: string;
+  detalles: DetalleCompra[];
+}
+
+// ── Agents & Recargas ──────────────────────────────────────────────────────
+
+export interface TransaccionAgente extends BaseEntityAudit {
+  id: number;
+  banco: string;
+  tipo_operacion: 'DEPOSITO' | 'RETIRO' | 'TRANSFERENCIA_QR';
+  monto: number;
+  comision_cliente: number;
+  comision_banco: number;
+  nro_referencia: string;
+  url_comprobante: string | null;
+  fecha: string;
+  id_sesion_caja: number;
+}
+```
+
+<Tip>
+  When rendering product lists or category lists, always filter by `item.estado === true` on the client side as a defensive measure, even though the API already applies this filter server-side. This prevents stale cached data from showing deactivated records.
+</Tip>

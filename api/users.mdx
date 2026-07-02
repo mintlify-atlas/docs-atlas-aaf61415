@@ -1,0 +1,404 @@
+---
+title: "Users API: Registration and Account Management"
+sidebarTitle: "Users"
+description: "REST endpoints for registering new users, listing accounts, and updating user profiles in Kantuta POS. POST /usuario/register is public."
+---
+
+The `/usuario` resource handles everything related to user accounts in Kantuta POS. The **registration endpoint is public** and atomically creates both a `Usuario` (login credentials and display name) and its linked `Persona` (personal profile — real name, birthdate, gender) in a single request. All other endpoints require a valid Bearer token. There is a strict one-to-one relationship between a `Usuario` and a `Persona`: you cannot have a user without a personal profile.
+
+<Info>
+  `POST /usuario/register` is the only public endpoint in this resource. All other operations require `Authorization: Bearer <access_token>`.
+</Info>
+
+---
+
+## POST /usuario/register
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-green-100 text-green-800">PUBLIC</span>
+
+Registers a new user account and simultaneously creates the linked `Persona` record in a single atomic operation. The combined request body carries both the login credentials and the personal profile fields. On success the full `Usuario` object — including the populated `persona` relation — is returned.
+
+<Note>
+  You do not need to call `POST /persona` separately when registering a user. This endpoint creates both records in one transaction.
+</Note>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The new user's email address. Must be unique across the system and in a valid email format.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The new user's password in plain text. Hashed server-side with bcrypt before storage.
+</ParamField>
+
+<ParamField body="nombres" type="string" required>
+  Given name(s) for the user's personal profile. Stored in the `Persona` record (max 100 characters).
+</ParamField>
+
+<ParamField body="p_apellido" type="string" required>
+  First (paternal) surname. Stored in the `Persona` record (max 50 characters).
+</ParamField>
+
+<ParamField body="s_apellido" type="string" required>
+  Second (maternal) surname. Stored in the `Persona` record (max 50 characters).
+</ParamField>
+
+<ParamField body="fecha_nacimiento" type="string" required>
+  Date of birth in `YYYY-MM-DD` format — e.g. `"1995-03-22"`.
+</ParamField>
+
+<ParamField body="genero" type="string" required>
+  Gender code. Typical values: `"M"` (male) or `"F"` (female).
+</ParamField>
+
+<ParamField body="name" type="string">
+  Optional display name shown in the UI (e.g. a username or alias). Defaults to the email prefix if omitted.
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Whether the account is active immediately on creation. Defaults to `true`.
+</ParamField>
+
+### Response
+
+Returns the newly created `Usuario` object with the embedded `Persona` and `Role`.
+
+<ResponseField name="id" type="number">
+  Auto-generated primary key of the user account.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name for the account.
+</ResponseField>
+
+<ResponseField name="email" type="string">
+  The registered email address.
+</ResponseField>
+
+<ResponseField name="estado" type="boolean">
+  Account active flag — `true` if the account is enabled.
+</ResponseField>
+
+<ResponseField name="persona" type="Persona">
+  The personal profile record automatically created alongside this account. See the [Persona interface](#usuario-typescript-interface) below.
+</ResponseField>
+
+<ResponseField name="role" type="Role">
+  The role assigned to the account. Defaults to the base user role unless `id_role` is specified.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of account creation.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X POST http://localhost:3000/usuario/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "maria.quispe@kantuta.com",
+    "password": "ClaveFuerte123!",
+    "nombres": "María Elena",
+    "p_apellido": "Quispe",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F",
+    "name": "maria.quispe",
+    "estado": true
+  }'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 4,
+  "name": "maria.quispe",
+  "email": "maria.quispe@kantuta.com",
+  "estado": true,
+  "created_at": "2024-07-10T14:22:00.000Z",
+  "updated_at": "2024-07-10T14:22:00.000Z",
+  "persona": {
+    "id": 4,
+    "nombres": "María Elena",
+    "p_apellido": "Quispe",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F",
+    "estado": true,
+    "created_at": "2024-07-10T14:22:00.000Z",
+    "updated_at": "2024-07-10T14:22:00.000Z"
+  },
+  "role": {
+    "id": 3,
+    "nombre": "user",
+    "descripcion": "Cajero estándar"
+  }
+}
+```
+</ResponseExample>
+
+---
+
+## GET /usuario
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Returns a paginated list of all registered user accounts. Each user record includes the linked `Persona` and `Role` objects. Deactivated accounts (`estado: false`) are included in the response — filter client-side if needed.
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>` — obtained from `POST /auth/login`.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="number">
+  HTTP status code mirrored in the body — `200` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable status message, e.g. `"Listado de usuarios registradas!"`.
+</ResponseField>
+
+<ResponseField name="data" type="Usuario[]">
+  Array of `Usuario` objects, each containing nested `persona` and `role`.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/usuario \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "status": 200,
+  "message": "Listado de usuarios registradas!",
+  "data": [
+    {
+      "id": 1,
+      "name": "Admin Kantuta",
+      "email": "admin@kantuta.com",
+      "estado": true,
+      "created_at": "2024-01-15T10:00:00.000Z",
+      "updated_at": "2024-01-15T10:00:00.000Z",
+      "persona": {
+        "id": 1,
+        "nombres": "Carlos",
+        "p_apellido": "Flores",
+        "s_apellido": "Mamani",
+        "fecha_nacimiento": "1990-06-15",
+        "genero": "M",
+        "estado": true
+      },
+      "role": { "id": 1, "nombre": "admin" }
+    }
+  ]
+}
+```
+</ResponseExample>
+
+---
+
+## GET /usuario/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Retrieves a single `Usuario` by its numeric ID, including the linked `Persona` and `Role`.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the user to retrieve.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="number">
+  `200` on success.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  `"Usuario encontrado!"` on success.
+</ResponseField>
+
+<ResponseField name="data" type="Usuario">
+  The requested user with nested `persona` and `role`.
+</ResponseField>
+
+<RequestExample>
+```bash cURL
+curl -X GET http://localhost:3000/usuario/4 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+---
+
+## PATCH /usuario/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Partially updates a user account. Only the fields included in the request body are modified. To update the linked personal profile (name, birthdate, etc.) use `PUT /persona` instead.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the user account to update.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>`.
+</ParamField>
+
+### Request body (all fields optional)
+
+<ParamField body="name" type="string">
+  Updated display name.
+</ParamField>
+
+<ParamField body="email" type="string">
+  Updated email address. Must be unique across all user accounts.
+</ParamField>
+
+<ParamField body="password" type="string">
+  New password in plain text. Hashed before storage.
+</ParamField>
+
+<ParamField body="estado" type="boolean">
+  Set to `false` to deactivate the account without deleting it.
+</ParamField>
+
+### Response
+
+Returns the updated `Usuario` object.
+
+<RequestExample>
+```bash cURL
+curl -X PATCH http://localhost:3000/usuario/4 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -d '{"name": "maria.quispe.cajera", "estado": true}'
+```
+</RequestExample>
+
+<ResponseExample>
+```json 200 OK
+{
+  "id": 4,
+  "name": "maria.quispe.cajera",
+  "email": "maria.quispe@kantuta.com",
+  "estado": true,
+  "created_at": "2024-07-10T14:22:00.000Z",
+  "updated_at": "2024-07-10T15:05:00.000Z",
+  "persona": {
+    "id": 4,
+    "nombres": "María Elena",
+    "p_apellido": "Quispe",
+    "s_apellido": "Condori",
+    "fecha_nacimiento": "1995-03-22",
+    "genero": "F"
+  },
+  "role": { "id": 3, "nombre": "user" }
+}
+```
+</ResponseExample>
+
+---
+
+## Usuario TypeScript Interface
+
+Use these interfaces in your React + TypeScript frontend (e.g. `src/types/api.d.ts`):
+
+```typescript
+export interface BaseEntityAudit {
+  estado: boolean;
+  id_user_create: number | null;
+  id_user_update?: number | null;
+  created_at: string; // ISO 8601 date string
+  updated_at: string; // ISO 8601 date string
+}
+
+export interface Role {
+  id: number;
+  nombre: 'admin' | 'lider' | 'user' | string;
+  descripcion?: string;
+}
+
+export interface Persona extends BaseEntityAudit {
+  id: number;
+  nombres: string;         // Max 100 chars
+  p_apellido: string;      // Max 50 chars
+  s_apellido?: string;     // Max 50 chars, nullable
+  fecha_nacimiento: string; // YYYY-MM-DD
+  genero: string;           // 'M' | 'F'
+}
+
+export interface Usuario extends BaseEntityAudit {
+  id: number;
+  name: string;       // Display name, max 100 chars
+  email: string;      // Unique, max 150 chars
+  persona: Persona;   // One-to-one: always present
+  role: Role;
+}
+
+// Registration request body
+export interface RegisterUsuarioRequest {
+  email: string;
+  password: string;
+  nombres: string;
+  p_apellido: string;
+  s_apellido: string;
+  fecha_nacimiento: string; // 'YYYY-MM-DD'
+  genero: string;
+  name?: string;
+  estado?: boolean;         // default: true
+}
+
+// Partial update request body
+export interface UpdateUsuarioRequest {
+  name?: string;
+  email?: string;
+  password?: string;
+  estado?: boolean;
+}
+```
+
+### Axios usage example
+
+```typescript
+import api from './api'; // The configured Axios instance (see Auth page)
+import { RegisterUsuarioRequest, Usuario } from './types';
+
+export async function registerUser(data: RegisterUsuarioRequest): Promise<Usuario> {
+  const response = await api.post<Usuario>('/usuario/register', data);
+  return response.data;
+}
+
+export async function listUsers(): Promise<{ status: number; message: string; data: Usuario[] }> {
+  const response = await api.get('/usuario');
+  return response.data;
+}
+
+export async function updateUser(id: number, patch: Partial<RegisterUsuarioRequest>): Promise<Usuario> {
+  const response = await api.patch<Usuario>(`/usuario/${id}`, patch);
+  return response.data;
+}
+```

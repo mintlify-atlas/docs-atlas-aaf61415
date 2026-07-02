@@ -1,0 +1,209 @@
+---
+title: "Agentes API: Financial Agent Transactions"
+sidebarTitle: "Agentes"
+description: "REST endpoints for registering and managing financial agent transactions (deposits, withdrawals, QR transfers) tied to a cash register session."
+---
+
+The Agentes API manages external financial service operations processed through the POS — commonly known as "agente bancario" (banking agent) services. These are third-party financial transactions where the store acts as an authorized agent for banks and mobile money services (e.g., Tigo Money, BCP, Banco Unión, Soli). Customers can deposit or withdraw cash, or perform QR transfers, and the store charges a commission for facilitating the service. Every agent transaction is linked to an active cash register session, keeping the session's theoretical balance accurate.
+
+<Note>
+  All endpoints require a valid `Authorization: Bearer <access_token>` header.
+</Note>
+
+---
+
+## Create an Agent Transaction
+
+```bash
+POST /agentes
+```
+
+Registers a new agent transaction. The transaction is tied to an active cash register session and records both the operation amount and any applicable commission charged to the client.
+
+<Tip>
+  Always use the bank's official reference or voucher number for `nro_referencia`. This field is unique — submitting a duplicate reference will be rejected. It serves as the primary traceability key between the POS record and the bank's own system.
+</Tip>
+
+#### Request Body
+
+<ParamField body="banco" type="string" required>
+  Name of the bank or financial service provider (e.g., `"TIGO_MONEY"`, `"BCP"`, `"BANCO_UNION"`, `"SOLI"`). This is a free-form string — use consistent naming conventions for clean reporting.
+</ParamField>
+<ParamField body="tipo_operacion" type="string" required>
+  Type of financial operation. One of:
+  - `DEPOSITO` — customer deposits cash into their account via the store.
+  - `RETIRO` — customer withdraws cash from their account via the store.
+  - `TRANSFERENCIA_QR` — customer performs a QR-code transfer through the store's terminal.
+</ParamField>
+<ParamField body="monto" type="number" required>
+  The transaction amount (what the customer deposits or receives). Minimum `1`.
+</ParamField>
+<ParamField body="comision_cliente" type="number">
+  Commission amount charged **to the client** for using the agent service. Optional; defaults to `0` if not provided.
+</ParamField>
+<ParamField body="nro_referencia" type="string" required>
+  The bank's official reference or voucher number for this operation. Must be **unique** across all agent transactions.
+</ParamField>
+<ParamField body="id_sesion_caja" type="number" required>
+  ID of the active cash register session where this transaction is being processed.
+</ParamField>
+<ParamField body="id_user_create" type="number" required>
+  ID of the user recording the transaction (audit trail).
+</ParamField>
+
+#### Example Request
+
+```json
+{
+  "banco": "TIGO_MONEY",
+  "tipo_operacion": "DEPOSITO",
+  "monto": 500.00,
+  "comision_cliente": 5.00,
+  "nro_referencia": "TM-8827334",
+  "id_sesion_caja": 101,
+  "id_user_create": 2
+}
+```
+
+```bash
+curl -X POST https://api.example.com/agentes \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "banco": "TIGO_MONEY",
+    "tipo_operacion": "DEPOSITO",
+    "monto": 500.00,
+    "comision_cliente": 5.00,
+    "nro_referencia": "TM-8827334",
+    "id_sesion_caja": 101,
+    "id_user_create": 2
+  }'
+```
+
+#### Response — `TransaccionAgente`
+
+<ResponseField name="id" type="number">
+  Unique identifier of the agent transaction.
+</ResponseField>
+<ResponseField name="banco" type="string">
+  Bank or service name as provided in the request.
+</ResponseField>
+<ResponseField name="tipo_operacion" type="string">
+  Operation type: `DEPOSITO`, `RETIRO`, or `TRANSFERENCIA_QR`.
+</ResponseField>
+<ResponseField name="monto" type="number">
+  Transaction amount.
+</ResponseField>
+<ResponseField name="comision_cliente" type="number">
+  Commission charged to the client. Defaults to `0` if not specified.
+</ResponseField>
+<ResponseField name="comision_banco" type="number">
+  Commission paid **by the bank to the store** for processing the transaction. This field is managed separately (e.g., updated in bulk reconciliation) and defaults to `0` at creation.
+</ResponseField>
+<ResponseField name="nro_referencia" type="string">
+  Bank reference or voucher number. Unique across all records.
+</ResponseField>
+<ResponseField name="url_comprobante" type="string | null">
+  Optional path to a stored receipt or voucher image uploaded separately.
+</ResponseField>
+<ResponseField name="fecha" type="string">
+  ISO 8601 timestamp of when the transaction was registered.
+</ResponseField>
+<ResponseField name="id_sesion_caja" type="number">
+  ID of the session this transaction belongs to.
+</ResponseField>
+
+---
+
+## List All Agent Transactions
+
+```bash
+GET /agentes
+```
+
+Returns all recorded agent transactions across all sessions and operators.
+
+```bash
+curl https://api.example.com/agentes \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## Get a Single Agent Transaction
+
+```bash
+GET /agentes/:id
+```
+
+Retrieves a single agent transaction by its ID.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the transaction.
+</ParamField>
+
+---
+
+## Delete (Void) an Agent Transaction
+
+```bash
+DELETE /agentes/:id
+```
+
+Soft-deletes (voids) an agent transaction. The record is marked as deleted but retained in the database for audit purposes. The associated session balance impact is reversed.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the transaction to void.
+</ParamField>
+
+```bash
+curl -X DELETE https://api.example.com/agentes/15 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## TypeScript Interface
+
+```typescript
+interface TransaccionAgente {
+  id: number;
+  banco: string;                   // e.g. 'BCP', 'TIGO_MONEY', 'BANCO_UNION', 'SOLI'
+  tipo_operacion: 'DEPOSITO' | 'RETIRO' | 'TRANSFERENCIA_QR';
+  monto: number;                   // min: 1
+  comision_cliente: number;        // Commission charged to the customer; default 0
+  comision_banco: number;          // Commission paid by the bank to the store; default 0
+  nro_referencia: string;          // Unique bank reference/voucher number
+  url_comprobante: string | null;  // Path to scanned receipt image, if uploaded
+  fecha: string;                   // ISO 8601 timestamp
+  id_sesion_caja: number;
+}
+
+// POST /agentes request body
+interface CrearTransaccionAgenteDto {
+  banco: string;
+  tipo_operacion: 'DEPOSITO' | 'RETIRO' | 'TRANSFERENCIA_QR';
+  monto: number;                   // min: 1
+  comision_cliente?: number;
+  nro_referencia: string;
+  id_sesion_caja: number;
+  id_user_create: number;
+}
+```
+
+---
+
+## Commission Fields Explained
+
+<Note>
+  **`comision_cliente` vs `comision_banco`:** These are two distinct income streams for the store.
+
+  - `comision_cliente` — set at creation time — is what the **customer pays** the store for facilitating the service (e.g., BOB 5 for a Tigo Money deposit).
+  - `comision_banco` — defaults to `0` at creation — is what the **bank pays the store** as a fee for acting as its authorized agent. This is typically settled in bulk by the bank at the end of the month and updated separately.
+
+  Both fields contribute to the store's agent revenue and are reflected in financial reports.
+</Note>

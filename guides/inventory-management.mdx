@@ -1,0 +1,261 @@
+---
+title: "Inventory Management: Products, Categories, and Stock"
+sidebarTitle: "Inventory Management"
+description: "Manage products and categories in Kantuta POS Backend. Create, update, and soft-delete inventory items. Track stock levels and receive low-stock alerts."
+---
+
+The inventory module in Kantuta POS is built around two core resources: **Categories** (`Categoria`) and **Products** (`Producto`). Categories organize your catalog; products are the individual items tracked with real-time stock levels, cost, and selling price. All deletes are soft — records are flagged as inactive (`estado: false`) rather than removed from the database, preserving historical references in sales and purchase records. Stock is maintained automatically: creating a sale decrements `stock_actual`, and creating a purchase (`compra`) increments it and updates `costo_compra`.
+
+---
+
+## Categories
+
+Categories group related products together and allow you to filter your catalog. Inactive categories are automatically excluded from `GET /inventario/categorias` list responses.
+
+### Create a Category
+
+```http
+POST /inventario/categorias
+```
+
+**Request body:**
+
+```json
+{
+  "nombre": "Accesorios",
+  "id_user_create": 1
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `nombre` | `string` | ✅ | Category name (max 100 characters) |
+| `id_user_create` | `integer` | ✅ | Audit field |
+| `id_user_update` | `integer` | Optional | Audit field |
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/inventario/categorias \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Accesorios",
+    "id_user_create": 1
+  }'
+```
+
+### List All Categories
+
+```http
+GET /inventario/categorias
+```
+
+Returns only **active** categories (`estado: true`). Soft-deleted categories are filtered out automatically.
+
+### Get a Category by ID
+
+```http
+GET /inventario/categorias/:id
+```
+
+### Update a Category
+
+```http
+PATCH /inventario/categorias/:id
+```
+
+Send only the fields you want to change. All fields from `CrearCategoriaDto` are optional in the update DTO.
+
+### Soft-Delete a Category
+
+```http
+DELETE /inventario/categorias/:id
+```
+
+Sets `estado: false` on the category. Products under this category are **not** affected; their individual state is managed separately.
+
+<Warning>
+  Soft-deleting a category does not remove its products from the inventory. Products will still be listed and can be sold. To fully retire a product line, soft-delete each product individually as well.
+</Warning>
+
+---
+
+## Products
+
+Products are the billable items in your catalog. Each product is linked to exactly one category and tracks both its selling price (`precio_venta`) and acquisition cost (`costo_compra`), allowing the system to compute margin data for reports.
+
+### Create a Product
+
+```http
+POST /inventario/producto
+```
+
+**Request body:**
+
+```json
+{
+  "nombre": "Audífonos Bluetooth Sony",
+  "codigo_barras": "10203040",
+  "precio_venta": 120.00,
+  "costo_compra": 70.00,
+  "stock_actual": 15,
+  "stock_minimo": 5,
+  "id_categoria": 2,
+  "id_user_create": 1
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `nombre` | `string` | ✅ | Full product name |
+| `codigo_barras` | `string` | Optional | Barcode string for scanner integration |
+| `precio_venta` | `number` | ✅ | Public selling price (min `0`) |
+| `costo_compra` | `number` | ✅ | Acquisition cost (min `0`) |
+| `stock_actual` | `integer` | ✅ | Current on-hand quantity (min `0`) |
+| `stock_minimo` | `integer` | ✅ | Alert threshold — triggers low-stock flag when `stock_actual` falls to or below this value (min `0`) |
+| `id_categoria` | `integer` | ✅ | ID of the parent category |
+| `id_user_create` | `integer` | ✅ | Audit field |
+| `id_user_update` | `integer` | Optional | Audit field |
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/inventario/producto \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Audífonos Bluetooth Sony",
+    "codigo_barras": "10203040",
+    "precio_venta": 120.00,
+    "costo_compra": 70.00,
+    "stock_actual": 15,
+    "stock_minimo": 5,
+    "id_categoria": 2,
+    "id_user_create": 1
+  }'
+```
+
+### List All Products
+
+```http
+GET /inventario/producto
+```
+
+Returns all active products. Each product in the response **includes its related `categoria` object** (eager loaded via TypeORM's `eager: true` setting on the `ManyToOne` relation).
+
+```bash
+curl -X GET https://api.example.com/inventario/producto \
+  -H "Authorization: Bearer <token>"
+```
+
+### Get a Product by ID
+
+```http
+GET /inventario/producto/:id
+```
+
+Returns a single product with its full category relation.
+
+### Update a Product
+
+```http
+PATCH /inventario/producto/:id
+```
+
+All fields from `CrearProductoDto` are optional in the update. Use this to correct pricing, update the barcode, or adjust `stock_minimo`.
+
+```bash
+curl -X PATCH https://api.example.com/inventario/producto/3 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "precio_venta": 130.00,
+    "stock_minimo": 8,
+    "id_user_update": 1
+  }'
+```
+
+### Soft-Delete a Product
+
+```http
+DELETE /inventario/producto/:id
+```
+
+Sets the product as inactive. It will no longer appear in `GET /inventario/producto` and cannot be added to new sales.
+
+---
+
+## Stock Fields Explained
+
+<CardGroup cols={2}>
+  <Card title="stock_actual" icon="boxes-stacked">
+    **Current on-hand quantity.** This is the real-time count of units physically available. It is automatically decremented when a sale is created and incremented when a purchase (`compra`) is registered.
+  </Card>
+  <Card title="stock_minimo" icon="triangle-exclamation">
+    **Low-stock alert threshold.** When `stock_actual` reaches or drops below this value, the product is flagged as low-stock in reports and dashboard KPIs. Set this to a realistic reorder point for each SKU.
+  </Card>
+</CardGroup>
+
+---
+
+## Stock Updates via Purchases
+
+When a `compra` (stock purchase) is created in the system, the backend automatically:
+
+1. **Increments** `stock_actual` by the purchased quantity for each product in the purchase.
+2. **Updates** `costo_compra` to reflect the new acquisition cost, keeping your margin calculations current.
+
+This means you should never manually update `stock_actual` to record received goods — always use the purchases module (`POST /compras`) to maintain a full purchasing history and accurate cost data.
+
+<Tip>
+  Manual `stock_actual` corrections (e.g., after a physical stock count reveals a discrepancy) can be made with `PATCH /inventario/producto/:id` and setting the corrected `stock_actual` value directly. Document the reason for the adjustment in your records.
+</Tip>
+
+---
+
+## Barcode Support
+
+The `codigo_barras` field is an optional string on every product. It accepts any barcode format (EAN-8, EAN-13, UPC-A, Code 128, etc.) as a plain string — no special encoding is required.
+
+Use this field to enable barcode-scanner workflows on the frontend:
+
+1. Scan a barcode at the POS terminal.
+2. Query `GET /inventario/producto` and filter client-side by `codigo_barras`, **or** implement a dedicated search endpoint that filters by this field.
+3. Auto-populate the product line in the sale form.
+
+---
+
+## Inventory Snapshot Report
+
+For a complete inventory report suitable for PDF generation, use the reportes module:
+
+```http
+GET /reportes/data/inventario?auditor=Admin
+```
+
+This returns a structured JSON snapshot of the full product catalog including current stock levels, costs, prices, and low-stock flags. Pass the `auditor` query parameter to embed the requester's name in the report header. See the [Reports](/guides/reports) guide for details.
+
+---
+
+## Endpoint Summary
+
+### Categories
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/inventario/categorias` | Create a category |
+| `GET` | `/inventario/categorias` | List active categories |
+| `GET` | `/inventario/categorias/:id` | Get category by ID |
+| `PATCH` | `/inventario/categorias/:id` | Update a category |
+| `DELETE` | `/inventario/categorias/:id` | Soft-delete a category |
+
+### Products
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/inventario/producto` | Create a product |
+| `GET` | `/inventario/producto` | List all products (with categoria) |
+| `GET` | `/inventario/producto/:id` | Get product by ID |
+| `PATCH` | `/inventario/producto/:id` | Update a product |
+| `DELETE` | `/inventario/producto/:id` | Soft-delete a product |

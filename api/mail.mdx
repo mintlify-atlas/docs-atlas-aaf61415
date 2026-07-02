@@ -1,0 +1,118 @@
+---
+title: "Mail API: Email Notification Endpoints"
+sidebarTitle: "Mail"
+description: "REST endpoint for sending email notifications from Kantuta POS Backend. Supports generic messages and templated emails via Nodemailer or Resend."
+---
+
+The Mail module handles all outbound email delivery for Kantuta POS. It exposes a single public REST endpoint for sending ad-hoc messages and powers four Handlebars-rendered HTML templates that are triggered automatically by other modules — welcome confirmations, password reset codes, and post-change security alerts. Under the hood the service is wired to **Resend** for transactional delivery (configured via `RESEND_API_KEY`), with a full **Nodemailer / SMTP** transport available as a fallback through the `@nestjs-modules/mailer` integration.
+
+---
+
+## Send a generic email
+
+<ParamField path="POST /mail" />
+
+Delivers a plain-text message to any recipient using the `generic-message.hbs` Handlebars template. This endpoint is **public** — no `Authorization` header is required.
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  Recipient email address. Must be a valid RFC-5321 address (e.g. `john@example.com`).
+</ParamField>
+
+<ParamField body="subject" type="string" required>
+  Email subject line displayed in the recipient's inbox.
+</ParamField>
+
+<ParamField body="message" type="string" required>
+  Body content of the email in plain text. Rendered inside the `generic-message.hbs` template.
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Recipient display name used in the greeting inside the email template.
+</ParamField>
+
+### Response
+
+Returns a JSON object confirming delivery and the Resend message ID.
+
+<ResponseField name="message" type="string">
+  Human-readable confirmation — `"Correo enviado correctamente"`.
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  Unique message ID assigned by the Resend API (e.g. `"re_123abc..."`). Use this to track delivery status in your Resend dashboard.
+</ResponseField>
+
+### Example
+
+```bash
+curl -X POST https://api.kantutapos.com/api/mail \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "cliente@ejemplo.com",
+    "subject": "Tu pedido ha sido procesado",
+    "message": "Estimado cliente, su pedido #1042 fue procesado exitosamente.",
+    "name": "Carlos Mamani"
+  }'
+```
+
+```json
+{
+  "message": "Correo enviado correctamente",
+  "id": "re_9XkLmN3p_AbCdEfGhIjKlMnOp"
+}
+```
+
+---
+
+## Email templates
+
+All emails are rendered with **Handlebars** (`@nestjs-modules/mailer` + `HandlebarsAdapter`). Templates live in `src/mail/templates/` and share two reusable Handlebars partials — `{{> header}}` and `{{> footer}}` — from `src/mail/templates/partials/`.
+
+| Template file | Trigger | Variables injected |
+|---|---|---|
+| `welcome.hbs` | New user registration (via Auth module) | `name`, `year` |
+| `reset-code.hbs` | Password reset code request (`POST /auth/reset/code`) | `code`, `name`, `date` |
+| `password-changed.hbs` | Successful password change | `name`, `date` |
+| `generic-message.hbs` | `POST /mail` (this endpoint) | `message`, `name`, `date` |
+
+### `welcome.hbs`
+
+Sent automatically when a new user account is created. Greets the user by name and includes the current year in the footer copyright. No developer action required — the Auth module calls `MailService.sendWelcome()` internally.
+
+### `reset-code.hbs`
+
+Delivers a short numeric code for password reset flows. Triggered by `POST /auth/reset/code`, not by calling `/mail` directly. The code, recipient name, and issue date are interpolated at send time.
+
+### `password-changed.hbs`
+
+A security confirmation dispatched after a successful password update. Contains the recipient's name and the local date of the change so the user can identify unauthorized activity.
+
+### `generic-message.hbs`
+
+The template consumed by `POST /mail`. Wraps any arbitrary plain-text `message` with the standard branded header and footer, addressed to `name`.
+
+---
+
+## Transport configuration
+
+<Note>
+  The production service uses **Resend** (`RESEND_API_KEY`). The `MailerModule` SMTP transport (configured with `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_SECURE`) is registered as the NestJS mailer transport but the `MailService` methods call `resend.emails.send()` directly, so Resend takes precedence at runtime.
+</Note>
+
+Set the following environment variables in your deployment platform (e.g. Render):
+
+| Variable | Description |
+|---|---|
+| `RESEND_API_KEY` | API key from [resend.com](https://resend.com) — primary transport |
+| `EMAIL_HOST` | SMTP host (fallback / mailer module config) |
+| `EMAIL_PORT` | SMTP port (e.g. `587`) |
+| `EMAIL_USER` | SMTP auth username |
+| `EMAIL_PASSWORD` | SMTP auth password |
+| `EMAIL_SECURE` | `"true"` for TLS on port 465, `"false"` for STARTTLS |
+| `EMAIL_REJECT_UNAUTHORIZED` | `"true"` to enforce strict TLS cert validation |
+
+<Note>
+  Password reset emails are sent automatically by `POST /auth/reset/code` — you do **not** need to call `POST /mail` to trigger them. Similarly, welcome and password-changed emails are fired by the Auth module without any additional API call.
+</Note>

@@ -1,0 +1,268 @@
+---
+title: "Categories API: Inventory Category Management"
+sidebarTitle: "Categories"
+description: "REST endpoints for creating, listing, updating, and soft-deleting product categories under /inventario/categorias in Kantuta POS Backend."
+---
+
+The **Categories** resource (`/inventario/categorias`) lets you organise your inventory into named groups. Every `Producto` belongs to exactly one `Categoria`, so categories must exist before products can be created. All write operations are audited — the API records which user created or last updated each record via `id_user_create` / `id_user_update`. Deletion is always a **soft delete**: the record remains in the database with `estado` set to `false`, preserving referential integrity with linked products.
+
+<Note>
+  All endpoints in this section require a valid JWT access token. Include it as `Authorization: Bearer <access_token>` on every request.
+</Note>
+
+---
+
+## The Categoria object
+
+```typescript
+interface Categoria extends BaseEntityAudit {
+  id: number;
+  nombre: string;
+  productos?: Producto[];
+}
+
+// BaseEntityAudit fields included on every Categoria response:
+interface BaseEntityAudit {
+  estado: boolean;        // false when soft-deleted
+  id_user_create: number;
+  id_user_update?: number;
+  created_at: string;     // ISO 8601 timestamp
+  updated_at: string;     // ISO 8601 timestamp
+}
+```
+
+<ResponseField name="id" type="number">
+  Auto-incremented primary key.
+</ResponseField>
+
+<ResponseField name="nombre" type="string">
+  Unique display name of the category (max 100 characters).
+</ResponseField>
+
+<ResponseField name="estado" type="boolean">
+  `true` while the category is active. Set to `false` by a soft delete.
+</ResponseField>
+
+<ResponseField name="id_user_create" type="number">
+  ID of the user who created this record.
+</ResponseField>
+
+<ResponseField name="id_user_update" type="number | undefined">
+  ID of the user who last updated this record.
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of record creation.
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+<ResponseField name="productos" type="Producto[]">
+  Products linked to this category. Only included when the relation is eagerly loaded by the service.
+</ResponseField>
+
+---
+
+## Endpoints
+
+### Create a category
+
+<code>POST /inventario/categorias</code>
+
+Creates a new inventory category. The `nombre` field must be unique across all categories — attempting to insert a duplicate name returns a database constraint error.
+
+#### Request body
+
+<ParamField body="nombre" type="string" required>
+  The category name. Must be a non-empty string of at most **100 characters**. Must be unique.
+</ParamField>
+
+<ParamField body="id_user_create" type="number" required>
+  Numeric ID of the authenticated user performing the creation. Stored for audit purposes.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X POST https://api.example.com/inventario/categorias \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Accesorios",
+    "id_user_create": 1
+  }'
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 3,
+  "nombre": "Accesorios",
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": null,
+  "created_at": "2025-01-15T10:30:00.000Z",
+  "updated_at": "2025-01-15T10:30:00.000Z"
+}
+```
+
+---
+
+### List all active categories
+
+<code>GET /inventario/categorias</code>
+
+Returns an array of all categories whose `estado` is `true`. Soft-deleted categories (`estado = false`) are automatically filtered out and will never appear in this list.
+
+<Note>
+  Inactive (soft-deleted) categories are excluded from this response. To inspect a deleted category you must query it directly by ID.
+</Note>
+
+#### Example
+
+```bash
+curl -X GET https://api.example.com/inventario/categorias \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+```json
+[
+  {
+    "id": 1,
+    "nombre": "Cargadores",
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-10T08:00:00.000Z",
+    "updated_at": "2025-01-10T08:00:00.000Z"
+  },
+  {
+    "id": 3,
+    "nombre": "Accesorios",
+    "estado": true,
+    "id_user_create": 1,
+    "id_user_update": null,
+    "created_at": "2025-01-15T10:30:00.000Z",
+    "updated_at": "2025-01-15T10:30:00.000Z"
+  }
+]
+```
+
+---
+
+### Get a category by ID
+
+<code>GET /inventario/categorias/:id</code>
+
+Retrieves a single category by its numeric primary key, regardless of its `estado`. Use this endpoint to inspect soft-deleted categories.
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the category.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X GET https://api.example.com/inventario/categorias/3 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 3,
+  "nombre": "Accesorios",
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": null,
+  "created_at": "2025-01-15T10:30:00.000Z",
+  "updated_at": "2025-01-15T10:30:00.000Z"
+}
+```
+
+---
+
+### Update a category
+
+<code>PATCH /inventario/categorias/:id</code>
+
+Partially updates an existing category. All body fields are optional — supply only the fields you want to change. The `updated_at` timestamp is refreshed automatically.
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the category to update.
+</ParamField>
+
+#### Request body
+
+<ParamField body="nombre" type="string">
+  New category name (max 100 characters). Must remain unique if changed.
+</ParamField>
+
+<ParamField body="id_user_update" type="number">
+  Numeric ID of the authenticated user performing the update. Stored for audit purposes.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X PATCH https://api.example.com/inventario/categorias/3 \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "nombre": "Accesorios Premium",
+    "id_user_update": 2
+  }'
+```
+
+#### Response `200 OK`
+
+```json
+{
+  "id": 3,
+  "nombre": "Accesorios Premium",
+  "estado": true,
+  "id_user_create": 1,
+  "id_user_update": 2,
+  "created_at": "2025-01-15T10:30:00.000Z",
+  "updated_at": "2025-01-15T14:05:00.000Z"
+}
+```
+
+---
+
+### Delete a category (soft delete)
+
+<code>DELETE /inventario/categorias/:id</code>
+
+Soft-deletes a category by setting its `estado` field to `false`. **The record is not physically removed from the database.** The category will no longer appear in `GET /inventario/categorias` responses, but it remains accessible by ID and continues to satisfy any existing foreign-key relationships.
+
+<Warning>
+  Soft-deleting a category that still has active products linked to it will hide the category from listings but the products themselves are unaffected. Consider reassigning or soft-deleting associated products before deactivating a category.
+</Warning>
+
+#### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the category to soft-delete.
+</ParamField>
+
+#### Example
+
+```bash
+curl -X DELETE https://api.example.com/inventario/categorias/3 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+#### Response `200 OK`
+
+Returns an empty body with HTTP status `200`.

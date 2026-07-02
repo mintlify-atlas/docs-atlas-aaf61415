@@ -1,0 +1,277 @@
+---
+title: "Sales Workflow: Recording and Managing Transactions"
+sidebarTitle: "Sales Workflow"
+description: "Learn how to create sales with multiple payment methods, how stock is automatically deducted, and how to update or void a sale in Kantuta POS Backend."
+---
+
+The sales module is the operational core of Kantuta POS. Every product transaction is recorded as a `Venta` — a parent record that groups line items (`DetalleVenta`), stores the payment method, links to the active cash register session, and tracks its own lifecycle state from `COMPLETADA` through to `ANULADA` or `EDITADA`. The backend automatically reduces stock on creation, maintains a full audit trail via `BaseEntityAudit`, and exposes summary endpoints for PDF report generation.
+
+## Prerequisites
+
+<Info>
+  You must have an **active cash register session** (`SesionCaja` with `estado_sesion: ABIERTA`) before recording any sale. The `id_sesion_caja` returned when opening a session is required in every sale payload. See the [Cash Register Flow](/guides/cash-register-flow) guide to open a session.
+</Info>
+
+---
+
+## Creating a Sale
+
+<Steps>
+  <Step title="Gather Line-Item Data">
+    For each product the customer is purchasing, collect:
+    - `id_producto` — the product's database ID
+    - `cantidad` — quantity sold (minimum `1`)
+    - `precio_unitario` — the unit selling price at the time of the transaction (decimal, min `0`)
+
+    The backend calculates the subtotal per line (`cantidad × precio_unitario`) and sums them into the `Venta.total` field automatically.
+  </Step>
+
+  <Step title="POST /ventas — Create the Sale">
+    Submit the full payload to register the sale, deduct stock, and link the transaction to the open session.
+
+    ```http
+    POST /ventas
+    ```
+
+    **TypeScript interface:**
+
+    ```typescript
+    interface DetalleVentaDto {
+      id_producto: number;      // Product ID
+      cantidad: number;         // Quantity (min 1)
+      precio_unitario: number;  // Unit price (min 0)
+    }
+
+    interface CrearVentaDto {
+      metodo_pago: 'EFECTIVO' | 'QR' | 'TRANSFERENCIA';
+      id_sesion_caja: number;   // Active session ID
+      detalles: DetalleVentaDto[];
+      id_user_create: number;   // Audit field
+    }
+    ```
+
+    **JSON example:**
+
+    ```json
+    {
+      "metodo_pago": "EFECTIVO",
+      "id_sesion_caja": 12,
+      "detalles": [
+        { "id_producto": 3, "cantidad": 2, "precio_unitario": 25.50 },
+        { "id_producto": 7, "cantidad": 1, "precio_unitario": 10.00 }
+      ],
+      "id_user_create": 1
+    }
+    ```
+
+    **cURL example:**
+
+    ```bash
+    curl -X POST https://api.example.com/ventas \
+      -H "Authorization: Bearer <token>" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "metodo_pago": "EFECTIVO",
+        "id_sesion_caja": 12,
+        "detalles": [
+          { "id_producto": 3, "cantidad": 2, "precio_unitario": 25.50 },
+          { "id_producto": 7, "cantidad": 1, "precio_unitario": 10.00 }
+        ],
+        "id_user_create": 1
+      }'
+    ```
+  </Step>
+
+  <Step title="Inspect the Response">
+    On success the endpoint returns `201 Created` with the full `Venta` record including its computed total, the embedded `detalles` array with subtotals, and the assigned `estado_venta`.
+
+    ```json
+    {
+      "id": 45,
+      "total": "61.00",
+      "metodo_pago": "EFECTIVO",
+      "id_sesion_caja": 12,
+      "estado_venta": "COMPLETADA",
+      "fecha": "2025-06-01T10:30:00.000Z",
+      "fecha_modificacion": "2025-06-01T10:30:00.000Z",
+      "detalles": [
+        {
+          "id": 89,
+          "id_producto": 3,
+          "cantidad": 2,
+          "precio_unitario": "25.50",
+          "subtotal": "51.00"
+        },
+        {
+          "id": 90,
+          "id_producto": 7,
+          "cantidad": 1,
+          "precio_unitario": "10.00",
+          "subtotal": "10.00"
+        }
+      ]
+    }
+    ```
+
+    <Note>
+      Stock is automatically deducted at the moment of creation. Each product's `stock_actual` is decremented by the `cantidad` specified in the corresponding `DetalleVentaDto`.
+    </Note>
+  </Step>
+</Steps>
+
+---
+
+## Payment Methods
+
+<CardGroup cols={3}>
+  <Card title="EFECTIVO" icon="money-bill">
+    Cash payment. The amount is tracked against the open `SesionCaja` balance and appears in the end-of-shift reconciliation.
+  </Card>
+  <Card title="QR" icon="qrcode">
+    QR code payment (e.g., via Bolivia's QR interoperability network). Recorded in the sale but handled externally — no automatic cash drawer impact.
+  </Card>
+  <Card title="TRANSFERENCIA" icon="arrow-right-arrow-left">
+    Bank transfer. Like QR, the transaction is recorded on the sale record; the actual funds transfer occurs outside the POS system.
+  </Card>
+</CardGroup>
+
+---
+
+## Listing Sales
+
+```http
+GET /ventas
+```
+
+Returns all sales records. Useful for back-office review and reconciliation dashboards.
+
+```bash
+curl -X GET https://api.example.com/ventas \
+  -H "Authorization: Bearer <token>"
+```
+
+```http
+GET /ventas/:id
+```
+
+Returns a single sale by ID including its full `detalles` array with line-item subtotals and the linked `sesion_caja`.
+
+```bash
+curl -X GET https://api.example.com/ventas/45 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Updating or Voiding a Sale
+
+Use `PATCH /ventas/:id` to update sale metadata or change its state. Line-item details (`detalles`) are intentionally excluded from this endpoint to prevent stock inconsistencies — product-level corrections should be handled through inventory adjustments or a new sale.
+
+```http
+PATCH /ventas/:id
+```
+
+**`ActualizarVentaDto` fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `estado_venta` | `COMPLETADA` \| `ANULADA` \| `EDITADA` | Optional | New lifecycle state of the sale |
+| `motivo_edicion` | `string` | Optional | Reason for the change (free text) |
+| `metodo_pago` | `EFECTIVO` \| `QR` \| `TRANSFERENCIA` | Optional | Correct the payment method if mis-entered |
+| `id_sesion_caja` | `integer` | Optional | Reassign to a different session (admin use) |
+| `id_user_update` | `integer` | Optional | Audit field |
+
+**Example — void a sale:**
+
+```bash
+curl -X PATCH https://api.example.com/ventas/45 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "estado_venta": "ANULADA",
+    "motivo_edicion": "El cliente se arrepintió de la compra",
+    "id_user_update": 1
+  }'
+```
+
+**Example — mark as edited:**
+
+```bash
+curl -X PATCH https://api.example.com/ventas/45 \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "estado_venta": "EDITADA",
+    "motivo_edicion": "Corrección de método de pago a QR",
+    "metodo_pago": "QR",
+    "id_user_update": 1
+  }'
+```
+
+<Warning>
+  Voiding a sale by setting `estado_venta: ANULADA` **does NOT automatically restore stock**. The backend only deducts stock on creation, not on void. To correct inventory levels after an annulment, either create a compensating purchase (`POST /compras`) or update the product's `stock_actual` directly via `PATCH /inventario/producto/:id`.
+</Warning>
+
+---
+
+## Sale States
+
+| `estado_venta` | Description |
+|---|---|
+| `COMPLETADA` | Default state — sale finalized and stock deducted. |
+| `ANULADA` | Sale cancelled. Record is retained for audit; stock is **not** auto-restored. |
+| `EDITADA` | Sale metadata was modified after creation (e.g., payment method correction). |
+
+---
+
+## Sales Report Summary
+
+For aggregated reporting — total revenue, sales count, and payment method breakdowns grouped over a date range — use the dedicated summary endpoint.
+
+```http
+POST /ventas/reporte-resumen
+```
+
+<Note>
+  This endpoint uses `POST` with the date range in the body but returns `200 OK` (not `201`). The `POST` verb was chosen because query strings can be unreliable with date formatting in some HTTP clients.
+</Note>
+
+**Request body:**
+
+```json
+{
+  "fechaInicio": "2025-01-01",
+  "fechaFin": "2025-01-31"
+}
+```
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/ventas/reporte-resumen \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fechaInicio": "2025-01-01",
+    "fechaFin": "2025-01-31"
+  }'
+```
+
+The response returns grouped financial totals — total revenue per payment method, number of transactions, and average ticket — suitable for rendering a PDF sales report.
+
+---
+
+## Endpoint Summary
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/ventas` | Create a sale (deducts stock) |
+| `GET` | `/ventas` | List all sales |
+| `GET` | `/ventas/:id` | Get sale with line items |
+| `PATCH` | `/ventas/:id` | Update or void a sale |
+| `DELETE` | `/ventas/:id` | Hard delete a sale record |
+| `POST` | `/ventas/reporte-resumen` | Grouped summary for reporting |
+
+<Tip>
+  For a per-sale PDF receipt, use `GET /reportes/data/venta/:id` — it returns structured receipt data including product names, operator info, and session details. See the [Reports](/guides/reports) guide.
+</Tip>

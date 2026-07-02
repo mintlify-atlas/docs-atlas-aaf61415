@@ -1,0 +1,161 @@
+{
+  "projectType": "api-service",
+  "projectName": "Kantuta POS Backend",
+  "projectDescription": "A NestJS-based REST API backend for the Kantuta POS (Point of Sale) system, providing inventory management, sales processing, cash register control, agent transactions, WhatsApp messaging, and AI-powered features for retail businesses.",
+  "theme": "luma",
+  "primaryColor": "#de2850",
+  "lightColor": "#e08cac",
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/authentication",
+              "concepts/data-models"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/cash-register-flow",
+              "guides/sales-workflow",
+              "guides/inventory-management",
+              "guides/whatsapp-integration",
+              "guides/reports"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/environment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth"
+            ]
+          },
+          {
+            "group": "Users & People",
+            "pages": [
+              "api/users",
+              "api/personas"
+            ]
+          },
+          {
+            "group": "Inventory",
+            "pages": [
+              "api/categories",
+              "api/products"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "api/cajas",
+              "api/ventas",
+              "api/compras",
+              "api/agentes",
+              "api/recargas"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "api/mail",
+              "api/whatsapp",
+              "api/reportes"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "JWT-based authentication with access and refresh tokens, role-based access control",
+    "Full inventory management: products, categories, stock tracking, barcode support",
+    "Sales processing with multi-payment methods (EFECTIVO, QR, TRANSFERENCIA) and stock auto-deduction",
+    "Cash register session management: open/close shifts, cash movements, balance reconciliation",
+    "Agent/operator financial transactions (deposits, withdrawals, QR transfers via Tigo Money, BCP, etc.)",
+    "Mobile top-up (recargas) management with operator balance injection",
+    "Purchase/procurement tracking with optional automatic cash register deduction",
+    "WhatsApp messaging via Baileys: text, images, documents, and group messages",
+    "Email notifications via Nodemailer/Resend with Handlebars templates",
+    "Reports and dashboard statistics: sales, inventory, operator productivity, cash movements",
+    "Redis caching for high-performance data access",
+    "WebSocket gateway via Socket.IO for real-time events",
+    "Swagger/OpenAPI interactive documentation at /api"
+  ],
+  "publicApiSurface": [
+    "POST /auth/login",
+    "POST /auth/refresh_token",
+    "POST /auth/reset/code",
+    "POST /auth/confirm-code",
+    "POST /auth/reset-confirm",
+    "POST /auth/change-password",
+    "GET  /auth/roles/list",
+    "GET|PATCH|DELETE /auth/:id",
+    "POST /usuario/register",
+    "GET|PATCH /usuario",
+    "GET|PUT /persona",
+    "POST /inventario/categorias",
+    "GET|PATCH|DELETE /inventario/categorias/:id",
+    "POST /inventario/producto",
+    "GET|PATCH|DELETE /inventario/producto/:id",
+    "GET|POST|PATCH|DELETE /cajas",
+    "POST /cajas/abrir",
+    "PATCH /cajas/sesion/:id/cerrar",
+    "GET /cajas/sesion-activa/:id_usuario",
+    "GET /cajas/sesion/:id/balance",
+    "POST /cajas/movimiento",
+    "POST /ventas",
+    "GET|PATCH|DELETE /ventas/:id",
+    "POST /ventas/reporte-resumen",
+    "POST /compras",
+    "GET /compras",
+    "POST /agentes",
+    "GET|DELETE /agentes/:id",
+    "POST /recargas/cliente",
+    "POST /recargas/inyeccion",
+    "GET /recargas/operadoras/saldos",
+    "GET /recargas/historial/clientes",
+    "GET /recargas/historial/inyecciones",
+    "POST /mail",
+    "GET /whatsapp/connect",
+    "GET /whatsapp/connect/view",
+    "POST /whatsapp/send",
+    "POST /whatsapp/send-image",
+    "POST /whatsapp/send-document",
+    "POST /whatsapp/send-to-group",
+    "GET /whatsapp/list-groups",
+    "GET /reportes/dashboard-stats",
+    "GET /reportes/data/movimientos-caja/:idSesion",
+    "GET /reportes/data/ventas-rango",
+    "GET /reportes/data/productividad-operador",
+    "GET /reportes/data/compras-rango",
+    "GET /reportes/data/inventario",
+    "GET /reportes/data/venta/:id",
+    "GET /reportes/data/producto/:id",
+    "GET /reportes/data/caja-historial/:id"
+  ]
+}

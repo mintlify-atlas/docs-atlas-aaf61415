@@ -1,0 +1,170 @@
+---
+title: "Deploy Kantuta POS Backend with Docker"
+sidebarTitle: "Docker"
+description: "Run Kantuta POS Backend in a Docker container using the provided Dockerfile and docker-compose configuration. Covers local and production deployment."
+---
+
+Kantuta POS Backend ships with a ready-to-use `Dockerfile` and `docker-compose.yml` so you can spin up the NestJS API in an isolated container with a single command. This guide walks you through local and production deployment, explains every relevant configuration option in the compose file, and covers useful day-to-day operational tasks such as tailing logs and building standalone images.
+
+## Prerequisites
+
+- [Docker Engine](https://docs.docker.com/engine/install/) v24+ installed and running
+- [Docker Compose](https://docs.docker.com/compose/install/) v2.x (`docker compose` CLI plugin, not the legacy `docker-compose`)
+- A running PostgreSQL instance and a running Redis instance accessible from within the container (see the [host.docker.internal](#note-on-host-docker-internal-and-linux) note below)
+
+## Using docker-compose
+
+<Steps>
+  <Step title="Clone the repository and create your .env file">
+    Clone the project and copy your environment configuration into `.env`. Docker Compose will automatically inject every variable in this file into the container.
+
+    ```bash
+    git clone https://github.com/Eleazarguitar18/kantuta_pos_back.git
+    cd kantuta_pos_back
+    cp .env.example .env   # or create .env manually — see the Environment Variables reference
+    ```
+
+    At minimum you must populate the database and Redis variables before starting the container. Refer to the [Environment Variables](/deployment/environment) page for the full list.
+  </Step>
+
+  <Step title="Build and start the container">
+    Run the following command from the project root. Docker Compose builds the image from the local `Dockerfile` and starts the `nest_api_kantuta` service on port **3000**.
+
+    ```bash
+    docker compose up --build
+    ```
+
+    The first build downloads the `node:20-alpine` base image and installs all npm dependencies; subsequent builds reuse the cached layer unless `package.json` changes.
+  </Step>
+
+  <Step title="Verify the API is running">
+    Once you see the NestJS startup log (`Application is running on: http://[::1]:3000`), verify the service is reachable:
+
+    ```bash
+    # Health-check via curl
+    curl http://localhost:3000
+
+    # Or open the Swagger UI in your browser
+    open http://localhost:3000/api
+    ```
+  </Step>
+</Steps>
+
+## docker-compose.yml explained
+
+Below is the full `docker-compose.yml` with an explanation of each key section:
+
+```yaml
+version: '3.8'
+
+services:
+  api:
+    container_name: nest_api_kantuta
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '3000:3000'
+    volumes:
+      - .:/usr/src/app
+      - /usr/src/app/node_modules
+    env_file:
+      - .env
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    restart: always
+```
+
+| Key | Value | Purpose |
+|-----|-------|---------|
+| `container_name` | `nest_api_kantuta` | Fixed name for the container — used when running `docker logs`, `docker exec`, etc. |
+| `ports` | `3000:3000` | Maps host port 3000 to container port 3000. Change the first number if port 3000 is already in use on your host. |
+| `volumes` (source mount) | `.:/usr/src/app` | Mounts the project root into the container so file changes on the host are immediately reflected — ideal for development with `start:dev`. |
+| `volumes` (node_modules) | `/usr/src/app/node_modules` | Anonymous volume that shadows the host's `node_modules` directory. Prevents conflicts between packages compiled for your host OS and packages compiled inside the Alpine container. |
+| `env_file` | `.env` | Loads every `KEY=VALUE` pair from the `.env` file as environment variables available inside the container. The `.env` file is **never** baked into the image. |
+| `extra_hosts` | `host.docker.internal:host-gateway` | Injects a `/etc/hosts` entry that resolves the special hostname `host.docker.internal` to the Docker host's gateway IP. This lets the container reach services (PostgreSQL, Redis) running directly on your host machine. |
+| `restart` | `always` | Instructs Docker to automatically restart the container if it exits or if the Docker daemon restarts — suitable for both development servers and production. |
+
+### Note on `host.docker.internal` and Linux
+
+On **macOS and Windows** Docker Desktop resolves `host.docker.internal` automatically. On **Linux** this hostname is not added by default, which is exactly why the `extra_hosts: host.docker.internal:host-gateway` line exists. Without it, any connection string pointing to `host.docker.internal` will fail to resolve on a Linux host.
+
+<Note>
+  If your PostgreSQL or Redis instance runs inside another Docker container (rather than on the host), add it as a service in this `docker-compose.yml` and use the service name as the hostname instead of `host.docker.internal`.
+</Note>
+
+## Building the image independently
+
+If you only need to build the Docker image without starting a container — for example to push it to a registry — use `docker build` directly:
+
+```bash
+docker build -t kantuta-pos-backend .
+```
+
+Tag it for a registry before pushing:
+
+```bash
+docker build -t your-registry/kantuta-pos-backend:1.0.0 .
+docker push your-registry/kantuta-pos-backend:1.0.0
+```
+
+## Running in production (detached mode)
+
+For production or any long-lived deployment, start the container in **detached mode** so it runs in the background and survives terminal closure:
+
+```bash
+docker compose up -d
+```
+
+To stop the service:
+
+```bash
+docker compose down
+```
+
+<Tip>
+  For production deployments, set `NODE_ENV=production` and `DATABASE_SSL=true` in your `.env` file. The `NODE_ENV` value is picked up by NestJS to disable development-only middleware, and `DATABASE_SSL=true` enables encrypted connections to your PostgreSQL host.
+</Tip>
+
+## Accessing container logs
+
+Stream live logs from the running container:
+
+```bash
+docker logs -f nest_api_kantuta
+```
+
+Show only the last 100 lines:
+
+```bash
+docker logs --tail 100 nest_api_kantuta
+```
+
+## Dockerfile reference
+
+The project `Dockerfile` is based on the official `node:20-alpine` image and installs `git` and `nano` as development utilities. Dependencies are cached as a separate layer before the source code is copied, keeping rebuilds fast when only application code changes.
+
+```dockerfile
+FROM node:20-alpine
+
+# Install development utilities
+RUN apk add --no-cache \
+    git \
+    nano
+
+WORKDIR /usr/src/app
+
+# Cache dependency layer
+COPY package*.json ./
+RUN npm install
+
+# Copy application source
+COPY . .
+
+EXPOSE 3000
+CMD ["npm", "run", "start:dev"]
+```
+
+<Note>
+  The default `CMD` runs `start:dev` (Webpack watch mode). For a production image you should override this command — either via the `command:` key in `docker-compose.yml` or by building a separate production Dockerfile — to run `npm run start:prod` after compiling the project with `npm run build`.
+</Note>

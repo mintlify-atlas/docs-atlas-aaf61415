@@ -1,0 +1,263 @@
+---
+title: "Environment Variables Reference for Kantuta POS"
+sidebarTitle: "Environment"
+description: "Complete reference of all environment variables used by Kantuta POS Backend, including database, Redis, JWT, email, and third-party API key settings."
+---
+
+Kantuta POS Backend is configured exclusively through environment variables — there are no hard-coded connection strings or secrets in the source code. Every module (TypeORM, Redis cache, JWT, Nodemailer, Resend, and the AI assistant) reads its configuration from `process.env` via NestJS `ConfigService` at startup. This page is the single authoritative reference for every variable the application recognises, what it controls, and whether it is required or optional.
+
+## Creating your .env file
+
+The simplest way to get started is to copy the example file shipped with the repository:
+
+```bash
+cp .env.example .env
+```
+
+If no `.env.example` is present, create `.env` manually in the project root and populate it using the reference below.
+
+<Warning>
+  Never commit your `.env` file to version control. It contains secrets (database passwords, JWT signing keys, API keys) that must remain private. The repository `.gitignore` already excludes `.env`, but double-check before pushing.
+</Warning>
+
+---
+
+## Database
+
+Kantuta POS uses **TypeORM** with a **PostgreSQL** driver. All connection details are read at startup; the application will throw if any required variable is missing.
+
+<ParamField query="DATABASE_HOST" type="string" required>
+  Hostname or IP address of the PostgreSQL server. When running PostgreSQL on your Docker host, use `host.docker.internal`. For a managed cloud database, use the provided hostname.
+
+  **Example:** `localhost`
+</ParamField>
+
+<ParamField query="DATABASE_PORT" type="number" required>
+  TCP port PostgreSQL is listening on.
+
+  **Default:** `5432`
+</ParamField>
+
+<ParamField query="DATABASE_USER" type="string" required>
+  PostgreSQL role (username) used to authenticate the connection.
+
+  **Example:** `kantuta_user`
+</ParamField>
+
+<ParamField query="DATABASE_PASSWORD" type="string" required>
+  Password for the PostgreSQL role specified in `DATABASE_USER`.
+</ParamField>
+
+<ParamField query="DATABASE_NAME" type="string" required>
+  Name of the PostgreSQL database. The database must exist before starting the application; TypeORM will create tables inside it but will not create the database itself.
+
+  **Example:** `kantuta_pos`
+</ParamField>
+
+<ParamField query="DATABASE_SSL" type="string">
+  Set to `"true"` to enable SSL/TLS for the database connection. Evaluated as a string comparison (`=== 'true'`), so any other value (including absence) disables SSL.
+
+  **Default:** `false` (SSL disabled)
+
+  **Example:** `true`
+</ParamField>
+
+---
+
+## Redis
+
+The Redis connection is used for the NestJS `CacheModule` (powered by `@keyv/redis`). You can supply either a full connection URL or individual host/port/credentials — the config resolves the URL first if present, then falls back to building one from the individual variables.
+
+<ParamField query="REDIS_HOST" type="string" required>
+  Hostname of the Redis server. When running Redis on your Docker host, use `host.docker.internal`.
+
+  **Example:** `localhost`
+</ParamField>
+
+<ParamField query="REDIS_PORT" type="number" required>
+  TCP port Redis is listening on.
+
+  **Default:** `6379`
+</ParamField>
+
+<ParamField query="REDIS_PASSWORD" type="string">
+  Password for Redis authentication (`requirepass`). Leave unset or empty for password-free local instances.
+</ParamField>
+
+<ParamField query="REDIS_USER" type="string">
+  Redis ACL username (Redis 6+ with ACL enabled). Leave unset for the default (`default`) user or password-only authentication.
+</ParamField>
+
+<ParamField query="REDIS_URL" type="string">
+  Full Redis connection URL. When set, this takes precedence over `REDIS_HOST`, `REDIS_PORT`, `REDIS_USER`, and `REDIS_PASSWORD`. Useful for cloud Redis providers that supply a single connection string.
+
+  **Example:** `redis://:mypassword@redis.example.com:6379`
+</ParamField>
+
+---
+
+## JWT
+
+The JWT configuration is validated on startup — the application will **throw** if `JWT_SECRET` is absent.
+
+<ParamField query="JWT_SECRET" type="string" required>
+  Secret key used to sign and verify access tokens. Use a cryptographically random string of at least 32 characters. Treat this value with the same care as a database password.
+
+  **Example:** `a_very_long_random_string_at_least_32_chars`
+</ParamField>
+
+<ParamField query="JWT_EXPIRES_IN" type="string">
+  Expiry duration for access tokens, expressed as a [ms](https://github.com/vercel/ms) string or a number of seconds.
+
+  **Default:** `8h` (falls back to this value in `jwt.config.ts` if unset)
+
+  **Example:** `1h`, `15m`, `3600`
+</ParamField>
+
+<ParamField query="JWT_REFRESH_SECRET" type="string">
+  Secret key for signing refresh tokens. Should be distinct from `JWT_SECRET`. Required only if the refresh-token flow is active.
+</ParamField>
+
+<ParamField query="JWT_REFRESH_EXPIRES_IN" type="string">
+  Expiry duration for refresh tokens.
+
+  **Example:** `7d`, `30d`
+</ParamField>
+
+---
+
+## Application
+
+<ParamField query="PORT" type="number">
+  HTTP port the NestJS server binds to inside the container.
+
+  **Default:** `3000`
+</ParamField>
+
+<ParamField query="NODE_ENV" type="string">
+  Runtime environment. Affects NestJS behaviour (e.g. error detail in responses) and is used by the database config to gate auto-migration features.
+
+  **Accepted values:** `development` | `production`
+</ParamField>
+
+---
+
+## Email — SMTP (Nodemailer)
+
+Kantuta POS Backend uses `@nestjs-modules/mailer` with Nodemailer for transactional emails via SMTP. These variables are consumed by `mail.module.ts`.
+
+<ParamField query="EMAIL_HOST" type="string">
+  SMTP server hostname.
+
+  **Example:** `smtp.gmail.com`, `smtp.mailgun.org`
+</ParamField>
+
+<ParamField query="EMAIL_PORT" type="number">
+  SMTP server port.
+
+  **Common values:** `587` (STARTTLS), `465` (SSL), `25` (plain)
+</ParamField>
+
+<ParamField query="EMAIL_SECURE" type="string">
+  Set to `"true"` to use implicit TLS (port 465). For STARTTLS (port 587) leave this unset or set to `"false"`.
+
+  **Example:** `false`
+</ParamField>
+
+<ParamField query="EMAIL_USER" type="string">
+  SMTP authentication username — typically your full email address.
+
+  **Example:** `noreply@yourdomain.com`
+</ParamField>
+
+<ParamField query="EMAIL_PASSWORD" type="string">
+  SMTP authentication password or app-specific password (required by providers like Gmail when 2FA is enabled).
+</ParamField>
+
+<ParamField query="EMAIL_REJECT_UNAUTHORIZED" type="string">
+  Set to `"true"` to enforce strict TLS certificate validation. Set to `"false"` only in trusted private networks where the SMTP server uses a self-signed certificate.
+
+  **Default:** `false`
+</ParamField>
+
+---
+
+## Email — Resend
+
+As an alternative (or complement) to SMTP, the `MailService` also supports [Resend](https://resend.com) for transactional email delivery.
+
+<ParamField query="RESEND_API_KEY" type="string">
+  API key obtained from your [Resend dashboard](https://resend.com/api-keys). Required when using Resend as the email transport.
+
+  **Example:** `re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`
+</ParamField>
+
+---
+
+## AI Services (optional)
+
+<ParamField query="GROQ_API_KEY" type="string">
+  API key for [Groq](https://console.groq.com). Used by the `AiAssistantService` which powers the **Kantu** AI assistant via the `llama-3.3-70b-versatile` model routed through Groq's OpenAI-compatible endpoint. If absent the AI assistant module will fail to initialise.
+</ParamField>
+
+<ParamField query="GEMINI_API_KEY" type="string">
+  API key for [Google Gemini](https://ai.google.dev/). Reserved for the `GeminiModule`. Leave unset if the Gemini integration is not in use.
+</ParamField>
+
+---
+
+## Sample .env template
+
+Copy this template into your `.env` file and fill in the values:
+
+```env
+# ─── Database ───────────────────────────────────────────────
+DATABASE_HOST=host.docker.internal
+DATABASE_PORT=5432
+DATABASE_USER=kantuta_user
+DATABASE_PASSWORD=your_database_password
+DATABASE_NAME=kantuta_pos
+DATABASE_SSL=false
+
+# ─── Redis ──────────────────────────────────────────────────
+REDIS_HOST=host.docker.internal
+REDIS_PORT=6379
+REDIS_PASSWORD=
+REDIS_USER=
+# REDIS_URL=redis://:password@host:6379   # Alternative: full URL
+
+# ─── JWT ────────────────────────────────────────────────────
+JWT_SECRET=replace_with_a_long_random_secret_min_32_chars
+JWT_EXPIRES_IN=8h
+JWT_REFRESH_SECRET=replace_with_another_long_random_secret
+JWT_REFRESH_EXPIRES_IN=7d
+
+# ─── Application ────────────────────────────────────────────
+PORT=3000
+NODE_ENV=development
+
+# ─── Email (SMTP / Nodemailer) ───────────────────────────────
+EMAIL_HOST=smtp.gmail.com
+EMAIL_PORT=587
+EMAIL_SECURE=false
+EMAIL_USER=noreply@yourdomain.com
+EMAIL_PASSWORD=your_smtp_password_or_app_password
+EMAIL_REJECT_UNAUTHORIZED=false
+
+# ─── Email (Resend) ──────────────────────────────────────────
+RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# ─── AI Services ────────────────────────────────────────────
+GROQ_API_KEY=gsk_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+GEMINI_API_KEY=AIzaSy_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+---
+
+## Note on TypeORM `synchronize`
+
+The database configuration currently sets `synchronize: true`, which instructs TypeORM to automatically update the database schema on every application startup to match your entity definitions. This is convenient during development but carries risk in production — a schema change can result in data loss if columns are dropped or renamed.
+
+<Note>
+  For production deployments, consider setting `synchronize: false` in `database.config.ts` (the commented-out alternative is already present in the source) and managing schema changes through TypeORM migrations instead. Run `npm run typeorm migration:generate` and `npm run typeorm migration:run` as part of your deployment pipeline.
+</Note>

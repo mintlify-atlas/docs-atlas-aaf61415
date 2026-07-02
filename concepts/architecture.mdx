@@ -1,0 +1,208 @@
+---
+title: "Kantuta POS Backend Architecture and Module Structure"
+sidebarTitle: "Architecture"
+description: "Explore how Kantuta POS Backend is organized into NestJS domain modules, how they share services, and how the request lifecycle flows through guards and filters."
+---
+
+Kantuta POS Backend is built with **NestJS 11** following a **domain-driven modular architecture**. Each business domain — inventory, sales, cash registers, agent transactions, and more — lives in its own self-contained NestJS module with its own controllers, services, DTOs, and TypeORM entities. Modules communicate through dependency injection rather than direct coupling, making the codebase straightforward to extend and test in isolation. The root `AppModule` wires every domain module together along with shared infrastructure concerns like the database connection, Redis cache, JWT, and global request pipeline.
+
+---
+
+## Module Map
+
+The table below lists every module registered in `AppModule` and the domain it owns.
+
+<CardGroup cols={2}>
+  <Card title="AppModule" icon="circle-nodes">
+    Root orchestrator. Registers `ConfigModule` (global env), `TypeOrmModule` (PostgreSQL via `DatabaseConfig`), `CacheModule` (Redis via `RedisConfig`), and the global `JwtModule`. Imports every domain module listed below.
+  </Card>
+  <Card title="AuthModule" icon="shield-halved">
+    Owns authentication and access control. Provides `AuthGuard` (JWT verification), `RolesGuard` (role-based authorization), and the `AuthController`. Entities: `auth.entity`, `role.entity`.
+  </Card>
+  <Card title="InventarioModule" icon="boxes-stacked">
+    Composed of two sub-modules: **CategoriasModule** and **ProductosModule**. Manages the product catalog, barcode lookup, pricing, stock levels, and stock alerts.
+  </Card>
+  <Card title="VentasModule" icon="cash-register">
+    Handles point-of-sale transactions. Controller and service manage sale creation, void/edit flows, and stock reduction. Entities: `venta`, `detalle-venta`.
+  </Card>
+  <Card title="CajasModule" icon="vault">
+    Manages physical cash drawers and shift sessions. Entities: `caja`, `sesion-caja`, `movimiento-caja`. Handles open/close sessions, cash-in/cash-out movements, and end-of-shift reconciliation.
+  </Card>
+  <Card title="AgentesModule" icon="building-columns">
+    Records external financial agent transactions (Tigo Money, QR transfers, bank deposits/withdrawals). Associates each transaction to an active `SesionCaja`.
+  </Card>
+  <Card title="ComprasModule" icon="truck-ramp-box">
+    Manages supplier purchases and stock replenishment. Entities: `compra`, `detalle-compra`. Optionally debits the active cash session when `pagado_con_caja` is true.
+  </Card>
+  <Card title="RecargasModule" icon="mobile-signal">
+    Handles mobile top-ups. Controller and service manage recharge operations. Entities: `inyeccion-operadora`, `operadora-saldo`, `recarga-cliente`.
+  </Card>
+  <Card title="MailModule" icon="envelope">
+    Sends transactional emails using **Nodemailer** with **Handlebars** templates. Used by AuthModule for password-reset codes and other system notifications.
+  </Card>
+  <Card title="WhatsappModule" icon="whatsapp">
+    Integrates a **Baileys** WebSocket gateway for WhatsApp messaging. Enables sending receipts and notifications directly to customers.
+  </Card>
+  <Card title="ReportesModule" icon="chart-bar">
+    Provides dashboard aggregate queries and printable reports — daily sales summaries, cash-register reconciliation totals, and low-stock alerts.
+  </Card>
+  <Card title="RedisManagerModule" icon="server">
+    Wraps the shared `CacheModule` (Redis) and exposes a typed `RedisManagerService` for storing and retrieving key-value data such as password-reset codes and session tokens.
+  </Card>
+  <Card title="GatewayModule" icon="plug">
+    Exposes a **Socket.IO** WebSocket gateway so connected frontends receive real-time push events (new sales, stock changes, session state updates) without polling the REST API.
+  </Card>
+  <Card title="GeminiModule / AiAssistantModule" icon="robot">
+    Integrates Google Gemini for AI-powered POS assistance — natural-language queries against inventory, sales summaries, and operator guidance.
+  </Card>
+</CardGroup>
+
+---
+
+## Request Lifecycle
+
+Every HTTP request passes through the following pipeline before reaching business logic:
+
+<Steps>
+  <Step title="Incoming HTTP Request">
+    The NestJS HTTP adapter (Express) receives the request. Morgan logs the method, path, and status code in `dev` format.
+  </Step>
+  <Step title="AuthGuard — JWT Verification">
+    The globally registered `AuthGuard` checks whether the route is decorated with `@Public()`. If public, the request passes immediately. Otherwise, the guard extracts the Bearer token from the `Authorization` header and calls `jwtService.verifyAsync()` using the `JWT_SECRET` from environment. The decoded payload (including `roleId` and `roleName`) is attached to `request.user`. A missing or invalid token throws `UnauthorizedException`.
+  </Step>
+  <Step title="RolesGuard — Role Verification">
+    If the controller or handler is decorated with `@Roles()`, the `RolesGuard` reads the required roles from metadata and compares them against `request.user.roleName` / `request.user.roleId`. Administrators (roleId 1) always pass. Operators (roleId 2) pass only if `'Operador'` is in the required roles list.
+  </Step>
+  <Step title="ValidationPipe — DTO Transformation & Whitelisting">
+    The global `ValidationPipe` transforms the raw JSON body into the typed DTO class, strips any undeclared fields (`whitelist: true`), and throws a `400 Bad Request` if unknown properties are present (`forbidNonWhitelisted: true`). Type coercion is applied automatically (`transform: true`).
+  </Step>
+  <Step title="Controller → Service → TypeORM → PostgreSQL">
+    The route handler delegates to the domain service. The service interacts with the PostgreSQL database through TypeORM repositories. Queries may read from or write to Redis via `RedisManagerService` for caching.
+  </Step>
+  <Step title="ClassSerializerInterceptor — Response Serialization">
+    The global `ClassSerializerInterceptor` applies `class-transformer` rules on the response object. Properties decorated with `@Exclude()` on entity classes (such as `password`) are stripped before the JSON is sent to the client.
+  </Step>
+  <Step title="AllExceptionsFilter — Unified Error Responses">
+    If any layer throws an exception, the global `AllExceptionsFilter` catches it and returns a consistent JSON error envelope (see [Error Format](#error-response-format) below).
+  </Step>
+</Steps>
+
+<Info>
+  The Redis cache layer sits alongside the Service layer — it is not a mandatory middleware but an opt-in call within individual services to cache expensive reads (product lists, report aggregates) and store short-lived tokens (password-reset codes with 15-minute TTL).
+</Info>
+
+---
+
+## Global Pipes
+
+The `ValidationPipe` is registered globally in `main.ts` with these options:
+
+```typescript
+app.useGlobalPipes(
+  new ValidationPipe({
+    whitelist: true,            // Strip properties not declared in the DTO
+    forbidNonWhitelisted: true, // Throw 400 if unknown properties are present
+    transform: true,            // Auto-coerce types (e.g. string "1" → number 1)
+  }),
+);
+```
+
+| Option | Effect |
+|---|---|
+| `whitelist: true` | Silently removes extra fields from the request body |
+| `forbidNonWhitelisted: true` | Returns a `400` error listing unexpected fields |
+| `transform: true` | Converts primitive types and instantiates DTO classes automatically |
+
+---
+
+## Global Filters
+
+`AllExceptionsFilter` is the single catch-all filter registered globally. It handles three exception categories:
+
+| Exception Type | HTTP Status | Behaviour |
+|---|---|---|
+| `HttpException` | As defined by exception | Extracts `message` and `error` from the response object |
+| `QueryFailedError` (TypeORM) | `409 Conflict` | Returns `'Error en consulta de Base de Datos'` with the DB detail |
+| Generic `Error` | `500 Internal Server Error` | Uses `error.name` as message, `error.message` as detail |
+
+**Error response envelope:**
+
+```json
+{
+  "statusCode": 400,
+  "timestamp": "2025-06-01T14:32:00.000Z",
+  "path": "/inventario/producto",
+  "message": ["nombre should not be empty"],
+  "error_detail": "Bad Request",
+  "stack": "..." 
+}
+```
+
+<Note>
+  The `stack` field is only included when `NODE_ENV` is not `production`.
+</Note>
+
+---
+
+## Global Interceptors
+
+`ClassSerializerInterceptor` is registered globally and works with `class-transformer` decorators placed on entity classes:
+
+```typescript
+app.useGlobalInterceptors(new ClassSerializerInterceptor(app.get(Reflector)));
+```
+
+Any entity property decorated with `@Exclude()` — most notably `password` on the `Usuario` entity — is automatically removed from every HTTP response without any manual mapping.
+
+---
+
+## BaseEntityAudit
+
+Most entities in the system inherit from the abstract `BaseEntityAudit` class defined in `src/common/entities/base-entity.audit.ts`:
+
+```typescript
+export abstract class BaseEntityAudit {
+  @Column({ default: true })
+  estado: boolean;
+
+  @Column({ nullable: true })
+  id_user_create: number;
+
+  @Column({ nullable: true })
+  id_user_update?: number;
+
+  @CreateDateColumn({ type: 'timestamp' })
+  created_at: Date;
+
+  @UpdateDateColumn({ type: 'timestamp' })
+  updated_at: Date;
+}
+```
+
+| Field | Type | Purpose |
+|---|---|---|
+| `estado` | `boolean` | Soft-delete flag. `true` = active, `false` = deleted |
+| `id_user_create` | `number` | ID of the user who created the record (audit trail) |
+| `id_user_update` | `number` | ID of the last user who modified the record |
+| `created_at` | `timestamp` | Auto-set on insert by TypeORM `@CreateDateColumn` |
+| `updated_at` | `timestamp` | Auto-updated on every save by TypeORM `@UpdateDateColumn` |
+
+---
+
+## Soft Delete Pattern
+
+Kantuta POS does **not** physically `DELETE` rows from the database for most domain entities. Instead, a delete operation sets `estado = false` on the target record.
+
+```typescript
+// Example: soft-deleting a product
+await this.productoRepository.update(id, {
+  estado: false,
+  id_user_update: userId,
+});
+```
+
+All list queries filter by `estado = true` so deleted records are invisible to the API consumers while remaining available for historical reports and audit queries.
+
+<Tip>
+  When building frontend delete confirmations, communicate to users that records are deactivated rather than permanently removed. This preserves referential integrity in sale history and purchase records.
+</Tip>

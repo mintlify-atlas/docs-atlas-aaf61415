@@ -1,0 +1,305 @@
+---
+title: "WhatsApp Integration with Baileys"
+sidebarTitle: "WhatsApp Integration"
+description: "Connect Kantuta POS Backend to WhatsApp using Baileys. Link your device via QR code, then send messages, images, and documents to customers and groups."
+---
+
+Kantuta POS Backend includes a built-in WhatsApp gateway powered by **[@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys)** — an open-source, reverse-engineered WhatsApp Web API. This means no paid WhatsApp Business API subscription is required. Instead, you link a real WhatsApp number to the server by scanning a QR code once, and the backend then gains the ability to send text messages, images, and documents programmatically to any WhatsApp contact or group. The linked session is persisted on disk, so subsequent server restarts reconnect automatically without re-scanning.
+
+<Warning>
+  This integration uses the unofficial WhatsApp Web protocol. Using it for bulk or unsolicited messaging violates WhatsApp's Terms of Service and may result in your number being temporarily or permanently banned. Use it responsibly — only send messages to customers who have opted in and expect communications from your business.
+</Warning>
+
+---
+
+## Setup & QR Code Linking
+
+<Steps>
+  <Step title="Start the NestJS Server">
+    The WhatsApp Baileys session initializes automatically when the application boots. No additional configuration is needed beyond having the module registered in `AppModule`.
+
+    ```bash
+    npm run start:dev
+    # or in production
+    npm run start:prod
+    ```
+
+    Watch the server logs — Baileys will emit a QR code string within a few seconds of startup if no saved session is found.
+  </Step>
+
+  <Step title="Retrieve the QR Code">
+    Navigate to the QR view endpoint in your browser (or call it programmatically):
+
+    **Browser-friendly HTML page:**
+
+    ```http
+    GET /whatsapp/connect/view
+    ```
+
+    Open `http://localhost:3000/api/whatsapp/connect/view` in a browser. The server renders an HTML page with a scannable QR image.
+
+    **JSON API endpoint (for frontend integration):**
+
+    ```http
+    GET /whatsapp/connect
+    ```
+
+    Returns JSON with a `qrBase64` field (a `data:image/png;base64,...` string) that you can render in an `<img>` tag, or a success message if already connected:
+
+    ```json
+    {
+      "success": true,
+      "qrBase64": "data:image/png;base64,iVBORw0KGg..."
+    }
+    ```
+
+    If already linked:
+
+    ```json
+    {
+      "success": true,
+      "message": "WhatsApp ya está vinculado o el código se está generando de fondo..."
+    }
+    ```
+  </Step>
+
+  <Step title="Scan with WhatsApp on Your Phone">
+    1. Open **WhatsApp** on your phone.
+    2. Go to **Settings → Linked Devices → Link a Device**.
+    3. Point your camera at the QR code displayed by the server.
+    4. Wait for the pairing confirmation — typically 2–5 seconds.
+
+    Once linked, the server logs will confirm the connection and Baileys will persist the session credentials to disk.
+  </Step>
+
+  <Step title="Session Persistence on Restart">
+    Baileys saves the authenticated session to a local directory (e.g., `./baileys_auth_info`). On subsequent server restarts, the session is restored from disk automatically — no re-scanning required unless the session expires or you unlink the device from WhatsApp.
+  </Step>
+</Steps>
+
+---
+
+## Sending Messages
+
+<Note>
+  All `/whatsapp/send*` routes are decorated with `@Public()` — they do **not** require a JWT Bearer token. Protect access to these endpoints at the network or API-gateway level in production environments.
+</Note>
+
+### Send a Text Message
+
+```http
+POST /whatsapp/send
+```
+
+**Request body:**
+
+```json
+{
+  "code": "591",
+  "phone": "71234567",
+  "message": "Hola! Tu pedido #45 está listo para recoger."
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | `string` | ✅ | Country code, digits only, 2–3 characters (e.g., `591` for Bolivia) |
+| `phone` | `string` | ✅ | Local phone number, digits only, 8–15 characters (e.g., `71234567`) |
+| `message` | `string` | ✅ | Text content of the message |
+
+<Note>
+  The backend concatenates `code + phone` internally to form the full WhatsApp JID: `59171234567@s.whatsapp.net`. Never include the `+` prefix or spaces in either field.
+</Note>
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/whatsapp/send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "591",
+    "phone": "71234567",
+    "message": "Hola! Tu pedido #45 está listo para recoger."
+  }'
+```
+
+**Response (`200 OK`):**
+
+```json
+{
+  "success": true,
+  "message": "Mensaje enviado con éxito",
+  "data": { ... }
+}
+```
+
+---
+
+### Send an Image
+
+```http
+POST /whatsapp/send-image
+```
+
+Upload an image file as `multipart/form-data`. Maximum file size: **5 MB**.
+
+**Form fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | `string` | ✅ | Country code (digits only, 2–3 chars) |
+| `phone` | `string` | ✅ | Local phone number (digits only, 8–15 chars) |
+| `caption` | `string` | Optional | Caption text displayed below the image |
+| `file` | `binary` | ✅ | Image file (`.jpg`, `.png`, etc.) — max 5 MB |
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/whatsapp/send-image \
+  -F "code=591" \
+  -F "phone=71234567" \
+  -F "caption=Catálogo de productos - Junio 2025" \
+  -F "file=@/path/to/catalogo.jpg"
+```
+
+---
+
+### Send a Document
+
+```http
+POST /whatsapp/send-document
+```
+
+Upload any file type (PDF, DOCX, ZIP, etc.) as `multipart/form-data`. Maximum file size: **15 MB**.
+
+**Form fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `code` | `string` | ✅ | Country code (digits only, 2–3 chars) |
+| `phone` | `string` | ✅ | Local phone number (digits only, 8–15 chars) |
+| `fileName` | `string` | Optional | Display name for the file (e.g., `Factura_Mayo.pdf`). Defaults to the original filename |
+| `file` | `binary` | ✅ | Document file — max 15 MB |
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/whatsapp/send-document \
+  -F "code=591" \
+  -F "phone=71234567" \
+  -F "fileName=Factura_Junio_2025.pdf" \
+  -F "file=@/path/to/factura.pdf"
+```
+
+---
+
+## Group Messaging
+
+### Send a Message to a Group
+
+```http
+POST /whatsapp/send-to-group
+```
+
+Send a text message to a WhatsApp group using its JID. Both fields are required.
+
+**Request body:**
+
+```json
+{
+  "groupId": "120363319482736451@g.us",
+  "message": "Estimados clientes, el negocio estará cerrado el lunes 2 de junio por feriado."
+}
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `groupId` | `string` | ✅ | Full WhatsApp group JID ending in `@g.us` |
+| `message` | `string` | ✅ | Message text to broadcast |
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/whatsapp/send-to-group \
+  -H "Content-Type: application/json" \
+  -d '{
+    "groupId": "120363319482736451@g.us",
+    "message": "Estimados clientes, el negocio estará cerrado el lunes 2 de junio por feriado."
+  }'
+```
+
+**Response (`200 OK`):**
+
+```json
+{
+  "success": true,
+  "message": "Comunicado enviado al grupo con éxito",
+  "data": { ... }
+}
+```
+
+### List All Groups
+
+```http
+GET /whatsapp/list-groups
+```
+
+Returns the name and JID of every group the linked WhatsApp number belongs to.
+
+```bash
+curl -X GET https://api.example.com/whatsapp/list-groups
+```
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "data": [
+    { "id": "120363319482736451@g.us", "name": "Clientes VIP Kantuta" },
+    { "id": "120363987654321098@g.us", "name": "Equipo de Ventas" }
+  ]
+}
+```
+
+<Tip>
+  Use `GET /whatsapp/list-groups` when setting up group broadcast automations — copy the `id` field and store it as your `groupId` for `POST /whatsapp/send-to-group`. Group JIDs never change even if the group name is updated.
+</Tip>
+
+---
+
+## Phone Number Format
+
+Kantuta POS uses a two-field format for phone numbers — `code` (country code) and `phone` (local number) — and concatenates them server-side:
+
+```
+code + phone → internal JID
+"591" + "71234567" → "59171234567@s.whatsapp.net"
+```
+
+| Country | `code` | `phone` example |
+|---|---|---|
+| Bolivia | `591` | `71234567` |
+| Perú | `51` | `987654321` |
+| Argentina | `54` | `1123456789` |
+| México | `52` | `5512345678` |
+
+**Rules:**
+- Both `code` and `phone` must contain **digits only** — no `+`, spaces, or dashes.
+- `code` must be 2–3 digits.
+- `phone` must be 8–15 digits.
+
+---
+
+## Endpoint Reference
+
+| Method | Endpoint | Auth | Description |
+|---|---|---|---|
+| `GET` | `/whatsapp/connect/view` | Public | HTML page with QR code |
+| `GET` | `/whatsapp/connect` | JWT | JSON QR code or connection status |
+| `POST` | `/whatsapp/send` | Public | Send a text message |
+| `POST` | `/whatsapp/send-image` | Public | Send an image (max 5 MB) |
+| `POST` | `/whatsapp/send-document` | Public | Send a document (max 15 MB) |
+| `POST` | `/whatsapp/send-to-group` | Public | Broadcast text to a group |
+| `GET` | `/whatsapp/list-groups` | Public | List all groups the bot is in |
+| `GET` | `/whatsapp/view` | Public | Browser-based send form (debug UI) |

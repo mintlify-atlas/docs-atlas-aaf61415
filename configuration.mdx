@@ -1,0 +1,227 @@
+---
+title: "Environment Configuration for Kantuta POS Backend"
+sidebarTitle: "Configuration"
+description: "All environment variables for Kantuta POS Backend: database, Redis, JWT, mail providers, and AI services. Required and optional settings explained."
+---
+
+Kantuta POS Backend reads all runtime settings from environment variables loaded by `@nestjs/config` at startup. This keeps secrets out of source code and makes the application trivially portable across local, staging, and production environments — you only change a `.env` file (or your platform's secret store) without touching any application code.
+
+<Info>
+  Copy `.env.example` to `.env` in the project root if it exists, or create `.env` from scratch using the reference below. `@nestjs/config` loads this file automatically when `NODE_ENV` is not `production`, and `ConfigModule.forRoot({ isGlobal: true })` makes every value available throughout all modules.
+
+  ```bash
+  cp .env.example .env
+  # then edit .env with your actual credentials
+  ```
+</Info>
+
+---
+
+## Database (PostgreSQL)
+
+The TypeORM connection is configured in `src/config/database.config.ts`. All `DATABASE_*` variables are read via `ConfigService` at bootstrap time.
+
+<ParamField path="DATABASE_HOST" type="string" required>
+  Hostname or IP address of your PostgreSQL server.
+
+  **Default:** `localhost`
+</ParamField>
+
+<ParamField path="DATABASE_PORT" type="number" required>
+  TCP port PostgreSQL is listening on.
+
+  **Default:** `5432`
+</ParamField>
+
+<ParamField path="DATABASE_USER" type="string" required>
+  PostgreSQL username with read/write access to the target database.
+</ParamField>
+
+<ParamField path="DATABASE_PASSWORD" type="string" required>
+  Password for the PostgreSQL user. Treated as a secret — never log or expose this value.
+</ParamField>
+
+<ParamField path="DATABASE_NAME" type="string" required>
+  Name of the PostgreSQL database to connect to. The database must already exist; TypeORM will create tables automatically via `synchronize: true`.
+</ParamField>
+
+<ParamField path="DATABASE_SSL" type="string">
+  Set to `'true'` to enable SSL/TLS for the PostgreSQL connection. Required when connecting to managed cloud databases (e.g. Supabase, AWS RDS, Railway).
+
+  **Default:** `false`  
+  **Accepted values:** `'true'` | `'false'`
+</ParamField>
+
+---
+
+## Redis
+
+The Redis cache is configured in `src/config/redis.config.ts` using `@keyv/redis` and `@nestjs/cache-manager`. If `REDIS_URL` is set it is used as-is; otherwise the URL is constructed from the individual host/port/password variables.
+
+<ParamField path="REDIS_HOST" type="string" required>
+  Hostname or IP of your Redis instance.
+
+  **Default:** `localhost`
+</ParamField>
+
+<ParamField path="REDIS_PORT" type="number" required>
+  TCP port Redis is listening on.
+
+  **Default:** `6379`
+</ParamField>
+
+<ParamField path="REDIS_PASSWORD" type="string">
+  Password for Redis authentication. Leave empty if your local Redis instance has no password configured.
+</ParamField>
+
+<ParamField path="REDIS_USER" type="string">
+  Username for Redis ACL authentication (Redis 6+). Leave empty for default-user access.
+</ParamField>
+
+<ParamField path="REDIS_URL" type="string">
+  Full Redis connection URL (e.g. `redis://:password@host:6379`). When provided, this takes precedence over the individual `REDIS_HOST`, `REDIS_PORT`, `REDIS_USER`, and `REDIS_PASSWORD` variables.
+</ParamField>
+
+---
+
+## JWT
+
+JWT configuration lives in `src/config/jwt.config.ts`. The `JWT_SECRET` is mandatory — the application throws an explicit error at startup if it is missing.
+
+<ParamField path="JWT_SECRET" type="string" required>
+  Secret key used to sign and verify access tokens. Use a cryptographically random string of at least 32 characters.
+
+  ```bash
+  # Generate a suitable secret on macOS/Linux:
+  node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+  ```
+</ParamField>
+
+<ParamField path="JWT_EXPIRES_IN" type="string">
+  Lifespan of the access token expressed as a [Vercel ms](https://github.com/vercel/ms) string.
+
+  **Default:** `'8h'`  
+  **Example values:** `'1h'`, `'15m'`, `'24h'`
+</ParamField>
+
+<ParamField path="JWT_REFRESH_SECRET" type="string">
+  Separate secret used to sign refresh tokens. If omitted, the application may fall back to `JWT_SECRET` depending on service implementation — it is strongly recommended to set this to a distinct value.
+</ParamField>
+
+<ParamField path="JWT_REFRESH_EXPIRES_IN" type="string">
+  Lifespan of the refresh token.
+
+  **Default:** `'7d'`  
+  **Example values:** `'7d'`, `'30d'`
+</ParamField>
+
+---
+
+## Server
+
+<ParamField path="PORT" type="number">
+  The TCP port the HTTP server binds to. The `main.ts` bootstrap calls `app.listen(process.env.PORT ?? 3000, '0.0.0.0')`.
+
+  **Default:** `3000`
+</ParamField>
+
+<ParamField path="NODE_ENV" type="string">
+  Runtime environment identifier. Affects logging verbosity and may influence future `synchronize` guards.
+
+  **Default:** `development`  
+  **Accepted values:** `development` | `production` | `test`
+</ParamField>
+
+---
+
+## Mail
+
+Kantuta supports two mail backends. Use **either** the Nodemailer SMTP variables **or** the Resend API key, depending on your preferred provider.
+
+### Nodemailer (SMTP)
+
+<ParamField path="MAIL_HOST" type="string">
+  SMTP server hostname (e.g. `smtp.gmail.com`, `smtp.mailgun.org`).
+</ParamField>
+
+<ParamField path="MAIL_USER" type="string">
+  SMTP authentication username (usually the sending email address).
+</ParamField>
+
+<ParamField path="MAIL_PASSWORD" type="string">
+  SMTP authentication password or app-specific password.
+</ParamField>
+
+<ParamField path="MAIL_FROM" type="string">
+  The `From` address used on outgoing emails.
+
+  **Example:** `"Kantuta POS <no-reply@yourdomain.com>"`
+</ParamField>
+
+### Resend
+
+<ParamField path="RESEND_API_KEY" type="string">
+  API key from your [Resend](https://resend.com) account. When configured, the `MailModule` uses the Resend SDK instead of Nodemailer SMTP.
+</ParamField>
+
+---
+
+## AI Services
+
+<ParamField path="GEMINI_API_KEY" type="string">
+  API key for Google Gemini (`@google/genai`). Required if the `GeminiModule` or `AiAssistantModule` is active.
+</ParamField>
+
+<ParamField path="GROQ_API_KEY" type="string">
+  API key for Groq (`groq-sdk`). Used as an alternative or complementary LLM provider in the AI assistant features.
+</ParamField>
+
+---
+
+## Complete .env Example
+
+```bash
+# ── Database ──────────────────────────────────────────────
+DATABASE_HOST=localhost
+DATABASE_PORT=5432
+DATABASE_USER=kantuta_user
+DATABASE_PASSWORD=super_secret_password
+DATABASE_NAME=kantuta_pos
+DATABASE_SSL=false
+
+# ── Redis ─────────────────────────────────────────────────
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_PASSWORD=
+
+# ── JWT ───────────────────────────────────────────────────
+JWT_SECRET=change_me_to_a_long_random_hex_string
+JWT_EXPIRES_IN=8h
+JWT_REFRESH_SECRET=change_me_to_another_long_random_hex_string
+JWT_REFRESH_EXPIRES_IN=7d
+
+# ── Server ────────────────────────────────────────────────
+PORT=3000
+NODE_ENV=development
+
+# ── Mail (SMTP) ───────────────────────────────────────────
+MAIL_HOST=smtp.example.com
+MAIL_USER=no-reply@example.com
+MAIL_PASSWORD=smtp_password
+MAIL_FROM="Kantuta POS <no-reply@example.com>"
+
+# ── Mail (Resend — alternative to SMTP) ──────────────────
+# RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx
+
+# ── AI Services ───────────────────────────────────────────
+GEMINI_API_KEY=your_google_gemini_key
+GROQ_API_KEY=your_groq_key
+```
+
+<Warning>
+  **Never commit your `.env` file to version control.** It contains database credentials, JWT secrets, and API keys. Ensure `.env` is listed in your `.gitignore`. Use platform-native secret management (e.g. Railway variables, AWS Secrets Manager, Doppler) in deployed environments instead of shipping a `.env` file.
+</Warning>
+
+<Note>
+  **`synchronize: true` is enabled in `database.config.ts`.** This means TypeORM automatically applies schema changes (creates tables, adds columns) every time the server starts, based on your entity definitions. This is convenient for development but can be destructive in production — consider setting `DATABASE_SSL=true` and disabling `synchronize` (or using migrations) before going live.
+</Note>

@@ -1,0 +1,185 @@
+---
+title: "Compras API: Purchase and Stock Procurement"
+sidebarTitle: "Compras"
+description: "REST endpoints for recording stock purchases in Kantuta POS. Creates purchase records, increments product stock, and optionally deducts from a cash register session."
+---
+
+The Compras API handles stock procurement — recording purchases from suppliers, updating inventory levels, and optionally registering the cash outflow through the active cash register session. When a purchase is submitted, the system automatically increments `stock_actual` and updates `costo_compra` for each product in the order. If `pagar_con_caja` is set to `true`, an `EGRESO` cash movement is automatically created on the specified session, keeping the cash register balance accurate without manual intervention.
+
+<Note>
+  All endpoints require a valid `Authorization: Bearer <access_token>` header.
+</Note>
+
+<Tip>
+  Use this endpoint whenever you receive a new inventory delivery from a supplier. It is the canonical way to restock products and keep cost-of-goods data up to date in Kantuta POS.
+</Tip>
+
+---
+
+## Create a Purchase
+
+```bash
+POST /compras
+```
+
+Records a new stock purchase. The backend computes the `total` automatically (sum of `cantidad × costo_unitario` for each line item), increments `stock_actual` on each referenced product, and updates the product's `costo_compra` to reflect the latest unit cost paid.
+
+#### Side Effects
+
+- **Inventory update:** `stock_actual += cantidad` and `costo_compra = costo_unitario` are applied to each product in `detalles`.
+- **Cash movement (conditional):** If `pagar_con_caja: true`, an `EGRESO` `MovimientoCaja` is automatically created on `id_sesion_caja` for the purchase total. Requires an active (`ABIERTA`) session.
+
+<Warning>
+  If `pagar_con_caja` is `true`, you **must** provide a valid `id_sesion_caja`. Omitting it when cash payment is intended will result in a validation error.
+</Warning>
+
+#### Request Body
+
+<ParamField body="proveedor" type="string">
+  Name of the supplier or store where goods were purchased (e.g., `"Proveedor Central"`). Optional but recommended for record-keeping.
+</ParamField>
+<ParamField body="pagar_con_caja" type="boolean" required>
+  Set to `true` to deduct the purchase total from the active cash register session. Set to `false` if the purchase was paid externally (bank transfer, credit, etc.).
+</ParamField>
+<ParamField body="id_sesion_caja" type="number">
+  ID of the active session to deduct from. **Required when `pagar_con_caja` is `true`.**
+</ParamField>
+<ParamField body="detalles" type="DetalleCompraDto[]" required>
+  Array of purchase line items. Each must include `id_producto`, `cantidad`, and `costo_unitario`.
+</ParamField>
+<ParamField body="detalles[].id_producto" type="number" required>
+  ID of the product being restocked.
+</ParamField>
+<ParamField body="detalles[].cantidad" type="number" required>
+  Number of units received. Minimum `1`.
+</ParamField>
+<ParamField body="detalles[].costo_unitario" type="number" required>
+  Cost paid per unit. Minimum `0`. This value is written back to the product's `costo_compra`.
+</ParamField>
+<ParamField body="id_user_create" type="number" required>
+  ID of the user recording the purchase (audit trail).
+</ParamField>
+
+#### Example Request
+
+```json
+{
+  "proveedor": "Proveedor Central",
+  "pagar_con_caja": true,
+  "id_sesion_caja": 101,
+  "detalles": [
+    {
+      "id_producto": 3,
+      "cantidad": 50,
+      "costo_unitario": 12.00
+    },
+    {
+      "id_producto": 7,
+      "cantidad": 20,
+      "costo_unitario": 8.50
+    }
+  ],
+  "id_user_create": 1
+}
+```
+
+```bash
+curl -X POST https://api.example.com/compras \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "proveedor": "Proveedor Central",
+    "pagar_con_caja": true,
+    "id_sesion_caja": 101,
+    "detalles": [
+      { "id_producto": 3, "cantidad": 50, "costo_unitario": 12.00 },
+      { "id_producto": 7, "cantidad": 20, "costo_unitario": 8.50 }
+    ],
+    "id_user_create": 1
+  }'
+```
+
+#### Response
+
+Returns the created `Compra` object with all line items.
+
+<ResponseField name="id" type="number">
+  Unique identifier of the purchase record.
+</ResponseField>
+<ResponseField name="total" type="number">
+  Auto-calculated sum of all line item subtotals (`cantidad × costo_unitario`).
+</ResponseField>
+<ResponseField name="proveedor" type="string | null">
+  Supplier name if provided.
+</ResponseField>
+<ResponseField name="pagado_con_caja" type="boolean">
+  `true` if the purchase was deducted from a cash register session.
+</ResponseField>
+<ResponseField name="id_sesion_caja" type="number | null">
+  Session ID used for deduction, or `null` if not paid via caja.
+</ResponseField>
+<ResponseField name="fecha" type="string">
+  ISO 8601 timestamp of the purchase.
+</ResponseField>
+<ResponseField name="detalles" type="DetalleCompra[]">
+  Array of line items, each with calculated `subtotal` and nested `producto` data.
+</ResponseField>
+
+---
+
+## List All Purchases
+
+```bash
+GET /compras
+```
+
+Returns the full purchase history, with each record including its `detalles` array (line items) and the nested `producto` object for each item — useful for displaying the complete purchase journal.
+
+```bash
+curl https://api.example.com/compras \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## TypeScript Interfaces
+
+```typescript
+interface DetalleCompra {
+  id: number;
+  id_producto: number;
+  cantidad: number;
+  costo_unitario: number;
+  subtotal: number;         // Calculated: cantidad × costo_unitario
+  producto?: Producto;      // Nested product object in GET responses
+}
+
+interface Compra {
+  id: number;
+  total: number;            // Sum of all detalle subtotals
+  proveedor: string | null;
+  pagado_con_caja: boolean;
+  id_sesion_caja: number | null;
+  fecha: string;            // ISO 8601 timestamp
+  detalles: DetalleCompra[];
+}
+
+// POST /compras request body
+interface CrearCompraDto {
+  proveedor?: string;
+  pagar_con_caja: boolean;
+  id_sesion_caja?: number;  // Required when pagar_con_caja === true
+  detalles: {
+    id_producto: number;
+    cantidad: number;        // min: 1
+    costo_unitario: number;  // min: 0
+  }[];
+  id_user_create: number;
+}
+```
+
+---
+
+<Note>
+  **Automatic EGRESO Movement:** When `pagar_con_caja: true`, the system creates a `MovimientoCaja` of type `EGRESO` on the referenced session for the full purchase total. This movement appears in the session's balance and is reflected in the closing `monto_final_teorico`. You do not need to call `POST /cajas/movimiento` separately.
+</Note>

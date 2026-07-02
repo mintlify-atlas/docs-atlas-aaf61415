@@ -1,0 +1,292 @@
+---
+title: "Ventas API: Sales and Transaction Management"
+sidebarTitle: "Ventas"
+description: "REST endpoints for creating sales, listing transactions, updating payment status, voiding sales, and fetching summary reports in Kantuta POS."
+---
+
+The Ventas API handles the complete sales lifecycle in Kantuta POS. When a sale is created, the system automatically calculates the order total from the provided line items, deducts stock from inventory for each product sold, and links the transaction to an active cash register session. Sales can later be edited or voided with an audit trail, and a dedicated report endpoint provides date-ranged financial summaries suitable for generating PDF reports.
+
+<Note>
+  All endpoints require a valid `Authorization: Bearer <access_token>` header. A sale cannot be created unless the referenced `id_sesion_caja` corresponds to a currently `ABIERTA` session.
+</Note>
+
+---
+
+## Create a Sale
+
+```bash
+POST /ventas
+```
+
+Records a new sale transaction. The backend computes the `total` automatically from the provided `detalles` (quantity × unit price) and decrements `stock_actual` for each product involved.
+
+<Warning>
+  Stock deduction happens automatically and immediately upon creation. If a product has insufficient stock, the request will be rejected. Verify stock levels using the Inventario API before submitting large orders.
+</Warning>
+
+#### Request Body
+
+<ParamField body="metodo_pago" type="string" required>
+  Payment method used for the transaction. One of: `EFECTIVO`, `QR`, `TRANSFERENCIA`.
+</ParamField>
+<ParamField body="id_sesion_caja" type="number" required>
+  ID of the currently active (open) cash register session to associate this sale with.
+</ParamField>
+<ParamField body="detalles" type="DetalleVentaDto[]" required>
+  Array of line items — each must include `id_producto`, `cantidad`, and `precio_unitario`.
+</ParamField>
+<ParamField body="detalles[].id_producto" type="number" required>
+  ID of the product being sold.
+</ParamField>
+<ParamField body="detalles[].cantidad" type="number" required>
+  Number of units sold. Minimum `1`.
+</ParamField>
+<ParamField body="detalles[].precio_unitario" type="number" required>
+  Selling price per unit at the time of sale. Minimum `0`.
+</ParamField>
+<ParamField body="id_user_create" type="number" required>
+  ID of the user creating this record (audit trail).
+</ParamField>
+
+#### Example Request
+
+```json
+{
+  "metodo_pago": "EFECTIVO",
+  "id_sesion_caja": 101,
+  "detalles": [
+    {
+      "id_producto": 5,
+      "cantidad": 2,
+      "precio_unitario": 45.00
+    },
+    {
+      "id_producto": 12,
+      "cantidad": 1,
+      "precio_unitario": 30.50
+    }
+  ],
+  "id_user_create": 3
+}
+```
+
+```bash
+curl -X POST https://api.example.com/ventas \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "metodo_pago": "EFECTIVO",
+    "id_sesion_caja": 101,
+    "detalles": [
+      { "id_producto": 5, "cantidad": 2, "precio_unitario": 45.00 },
+      { "id_producto": 12, "cantidad": 1, "precio_unitario": 30.50 }
+    ],
+    "id_user_create": 3
+  }'
+```
+
+#### Response
+
+Returns the created `Venta` object with calculated totals and all line items.
+
+<ResponseField name="id" type="number">
+  Unique identifier of the sale.
+</ResponseField>
+<ResponseField name="total" type="number">
+  Auto-calculated sum of all line item subtotals (quantity × unit price per line).
+</ResponseField>
+<ResponseField name="metodo_pago" type="string">
+  Payment method recorded: `EFECTIVO`, `QR`, or `TRANSFERENCIA`.
+</ResponseField>
+<ResponseField name="estado_venta" type="string">
+  Initial status is always `"COMPLETADA"`.
+</ResponseField>
+<ResponseField name="fecha" type="string">
+  ISO 8601 timestamp of the transaction.
+</ResponseField>
+<ResponseField name="id_sesion_caja" type="number">
+  ID of the session this sale belongs to.
+</ResponseField>
+<ResponseField name="detalles" type="DetalleVenta[]">
+  Array of line items with calculated `subtotal` per item.
+</ResponseField>
+<ResponseField name="motivo_edicion" type="string | null">
+  Populated only if the sale has been edited or voided.
+</ResponseField>
+
+---
+
+## List All Sales
+
+```bash
+GET /ventas
+```
+
+Returns all recorded sales, each including their associated `detalles` (line items). Results are ordered by creation date descending.
+
+```bash
+curl https://api.example.com/ventas \
+  -H "Authorization: Bearer <access_token>"
+```
+
+---
+
+## Get a Single Sale
+
+```bash
+GET /ventas/:id
+```
+
+Retrieves a single sale by ID, including full line item details.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the sale.
+</ParamField>
+
+---
+
+## Update or Void a Sale
+
+```bash
+PATCH /ventas/:id
+```
+
+Partially updates an existing sale. Use this endpoint to correct a payment method, change the session, or mark a sale as voided (`ANULADA`). All changes are tracked via `estado_venta` and `motivo_edicion`.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the sale to update.
+</ParamField>
+
+#### Request Body
+
+All fields are optional. Provide only the fields you wish to change.
+
+<ParamField body="metodo_pago" type="string">
+  Corrected payment method: `EFECTIVO`, `QR`, or `TRANSFERENCIA`.
+</ParamField>
+<ParamField body="id_sesion_caja" type="number">
+  Updated session reference.
+</ParamField>
+<ParamField body="estado_venta" type="string">
+  New status: `COMPLETADA`, `ANULADA`, or `EDITADA`.
+</ParamField>
+<ParamField body="motivo_edicion" type="string">
+  Required reason when setting `estado_venta` to `ANULADA` or `EDITADA`.
+</ParamField>
+<ParamField body="id_user_update" type="number">
+  ID of the user making the change (audit trail).
+</ParamField>
+
+```bash
+# Void a sale
+curl -X PATCH https://api.example.com/ventas/42 \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "estado_venta": "ANULADA",
+    "motivo_edicion": "Cliente solicitó devolución completa",
+    "id_user_update": 1
+  }'
+```
+
+---
+
+## Delete a Sale
+
+```bash
+DELETE /ventas/:id
+```
+
+Permanently removes a sale record from the database. Use `PATCH` with `estado_venta: "ANULADA"` for a softer audit-safe void.
+
+#### Path Parameters
+
+<ParamField path="id" type="number" required>
+  The numeric ID of the sale to delete.
+</ParamField>
+
+<Warning>
+  This is a hard delete. Prefer voiding via `PATCH /ventas/:id` with `estado_venta: "ANULADA"` to maintain an audit trail.
+</Warning>
+
+---
+
+## Sales Summary Report
+
+```bash
+POST /ventas/reporte-resumen
+```
+
+Returns grouped financial totals for a specified date range. Designed to power PDF report generation and end-of-day reconciliation summaries. Returns HTTP `200` (not the default `201` for POST).
+
+<Tip>
+  Send date strings in ISO 8601 format (`YYYY-MM-DD` or full datetime). The backend accepts `fechaInicio` and `fechaFin` as inclusive boundaries.
+</Tip>
+
+#### Request Body
+
+<ParamField body="fechaInicio" type="string" required>
+  Start date/time of the reporting period (ISO 8601, e.g. `"2024-01-01"`).
+</ParamField>
+<ParamField body="fechaFin" type="string" required>
+  End date/time of the reporting period (ISO 8601, e.g. `"2024-01-31"`).
+</ParamField>
+
+```bash
+curl -X POST https://api.example.com/ventas/reporte-resumen \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fechaInicio": "2024-01-01",
+    "fechaFin": "2024-01-31"
+  }'
+```
+
+---
+
+## TypeScript Interfaces
+
+```typescript
+interface DetalleVenta {
+  id: number;
+  id_producto: number;
+  id_venta: number;
+  cantidad: number;
+  precio_unitario: number;
+  subtotal: number;         // Calculated: cantidad × precio_unitario
+}
+
+interface Venta {
+  id: number;
+  total: number;            // Sum of all detalle subtotals
+  metodo_pago: 'EFECTIVO' | 'QR' | 'TRANSFERENCIA';
+  estado_venta: 'COMPLETADA' | 'ANULADA' | 'EDITADA';
+  motivo_edicion: string | null;
+  fecha: string;            // ISO 8601 timestamp
+  fecha_modificacion: string;
+  id_sesion_caja: number;
+  detalles: DetalleVenta[];
+}
+
+// POST /ventas request body
+interface CrearVentaDto {
+  metodo_pago: 'EFECTIVO' | 'QR' | 'TRANSFERENCIA';
+  id_sesion_caja: number;
+  detalles: {
+    id_producto: number;
+    cantidad: number;        // min: 1
+    precio_unitario: number; // min: 0
+  }[];
+  id_user_create: number;
+}
+```
+
+---
+
+<Note>
+  **Stock Auto-Deduction:** Upon successful sale creation, `stock_actual` is automatically decremented for each product in `detalles`. If any product has insufficient stock, the entire sale request is rejected. Always check current stock levels via the Inventario API before processing large transactions.
+</Note>

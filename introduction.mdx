@@ -1,0 +1,104 @@
+---
+title: "Kantuta POS Backend: NestJS API for Retail Management"
+sidebarTitle: "Introduction"
+description: "Kantuta POS Backend is a NestJS 11 REST API for retail point-of-sale systems. It covers inventory, sales, cash registers, agents, WhatsApp, and reporting."
+---
+
+Kantuta POS Backend is a production-ready REST API built with **NestJS 11** that powers the full operational lifecycle of a retail point-of-sale system. From inventory tracking and sales processing to cash-register management, agent workforce coordination, AI-assisted interactions, and automated WhatsApp messaging — Kantuta provides a single, cohesive backend capable of running modern retail commerce. Its domain-driven, modular architecture means each business capability is fully encapsulated, making the system straightforward to extend, test, and maintain at scale.
+
+## Key Capabilities
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get the server running locally in under 5 minutes — installation, environment setup, and your first authenticated API call.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    A complete reference for every environment variable: database, Redis, JWT, mail providers, and AI services.
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    Understand how the NestJS modules, guards, interceptors, and WebSocket gateway fit together.
+  </Card>
+  <Card title="Authentication" icon="lock" href="/concepts/authentication">
+    JWT-based login, refresh-token rotation, role-based guards, and password-reset flows explained in depth.
+  </Card>
+</CardGroup>
+
+## Tech Stack
+
+Kantuta POS Backend is built on a curated set of battle-tested technologies:
+
+| Layer | Technology |
+|---|---|
+| Framework | **NestJS 11** (modular, decorator-driven) |
+| Language | **TypeScript 5** |
+| Database | **PostgreSQL** via `pg` driver |
+| ORM | **TypeORM 0.3** with `autoLoadEntities` + `synchronize` |
+| Cache | **Redis** via `@keyv/redis` + `@nestjs/cache-manager` |
+| Auth | **JWT** (`@nestjs/jwt`) + **bcrypt** password hashing |
+| Email | **Nodemailer** (SMTP) and/or **Resend** API |
+| WhatsApp | **Baileys** (`@whiskeysockets/baileys`) — unofficial WA Web API |
+| AI / LLM | **Google Gemini** (`@google/genai`) and **Groq** (`groq-sdk`) |
+| Real-time | **Socket.IO WebSockets** (`@nestjs/websockets` + `@nestjs/platform-socket.io`) |
+| API Docs | **Swagger / OpenAPI** (`@nestjs/swagger`) at `/api` |
+| Validation | `class-validator` + `class-transformer` with global `ValidationPipe` |
+| Logging | `morgan` HTTP logger |
+
+## Modules Overview
+
+The application follows a domain-oriented layout. Every feature lives in its own NestJS module with dedicated controllers, services, DTOs, and TypeORM entities.
+
+<AccordionGroup>
+  <Accordion title="AuthModule" icon="shield-halved">
+    Handles user registration, login, JWT issuance, refresh-token rotation, role management, and multi-step password-reset flows (code request → code confirmation → password update). All public endpoints are decorated with `@Public()` so the global JWT guard lets them through without a bearer token.
+  </Accordion>
+
+  <Accordion title="InventarioModule" icon="boxes-stacked">
+    The core inventory engine, split into two sub-domains:
+    - **Productos** — create, update, and query stock-keeping units with pricing, stock levels, and category associations.
+    - **Categorias** — hierarchical product classification used across catalog queries and reporting.
+  </Accordion>
+
+  <Accordion title="VentasModule" icon="cart-shopping">
+    Manages the full sales transaction lifecycle: creating sale records, associating line items, updating stock on commit, and persisting historical data for downstream reporting.
+  </Accordion>
+
+  <Accordion title="CajasModule" icon="cash-register">
+    Administers cash-register (caja) sessions — opening and closing a register, recording cash flows (inflows/outflows), and computing daily balances per point of sale.
+  </Accordion>
+
+  <Accordion title="AgentesModule" icon="users">
+    Manages the sales-agent workforce: agent profiles, assignment to registers or sales territories, and association with sales transactions for commission and performance tracking.
+  </Accordion>
+
+  <Accordion title="ComprasModule" icon="truck">
+    Records supplier purchase orders and goods receipts, feeding new stock directly into the inventory layer to keep quantities accurate in real time.
+  </Accordion>
+
+  <Accordion title="RecargasModule" icon="bolt">
+    Handles recharge or top-up operations (e.g. prepaid product reloads), integrating with the inventory and sales modules to reflect balance changes.
+  </Accordion>
+
+  <Accordion title="MailModule" icon="envelope">
+    Centralized email-notification service powered by Nodemailer (SMTP) or the Resend API. Used internally by `AuthModule` for password-reset codes and by other modules for automated alerts.
+  </Accordion>
+
+  <Accordion title="WhatsappModule" icon="whatsapp">
+    Integrates the Baileys library to send and receive WhatsApp messages programmatically. Enables automated order confirmations, stock alerts, and customer notifications over WhatsApp Web without a third-party paid gateway.
+  </Accordion>
+
+  <Accordion title="ReportesModule" icon="chart-bar">
+    Generates sales summaries, inventory snapshots, and financial reports. Aggregates data across Ventas, Cajas, Inventario, and Agentes to produce structured report payloads consumable by front-end dashboards.
+  </Accordion>
+
+  <Accordion title="RedisManagerModule" icon="database">
+    An abstraction layer over the Redis cache that provides reusable helpers for storing, reading, and invalidating cached values. Used by AuthModule (refresh tokens, reset codes) and other modules that need ephemeral state.
+  </Accordion>
+
+  <Accordion title="GatewayModule" icon="plug">
+    Exposes a Socket.IO WebSocket gateway so connected clients receive real-time push events — for example, live sales updates, stock change notifications, or WhatsApp session status changes — without polling the REST API.
+  </Accordion>
+</AccordionGroup>
+
+<Note>
+  Once the server is running, the full interactive Swagger / OpenAPI documentation is available at **[http://localhost:3000/api](http://localhost:3000/api)**. Every endpoint is listed there with request/response schemas, authentication requirements, and a live "Try it out" interface.
+</Note>

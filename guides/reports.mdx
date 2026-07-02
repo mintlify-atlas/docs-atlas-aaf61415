@@ -1,0 +1,258 @@
+---
+title: "Reports and Dashboard Statistics"
+sidebarTitle: "Reports"
+description: "Fetch dashboard KPIs, sales range data, inventory snapshots, operator productivity, and cash movement reports from Kantuta POS Backend for PDF generation."
+---
+
+The `reportes` module in Kantuta POS acts as a dedicated data-serving layer for your frontend's reporting and analytics needs. Rather than generating PDFs on the server, every endpoint returns structured JSON — pre-aggregated, pre-labeled, and ready to be consumed by client-side PDF libraries (jsPDF, Puppeteer, React-PDF) or charting components. This separation of concerns keeps the backend focused on data integrity while giving your frontend full control over layout, branding, and formatting.
+
+<Tip>
+  All report endpoints return structured JSON objects. Feed them directly into a PDF generation library on the frontend — **jsPDF** for client-side rendering, **Puppeteer** for server-side HTML-to-PDF, or **React-PDF** for component-based layouts.
+</Tip>
+
+---
+
+## Dashboard Statistics
+
+The dashboard stats endpoint is the single call that powers your home-screen KPIs. It returns consolidated metrics across sales, agent recharges, inventory health, and monthly sales trends — all in one response.
+
+```http
+GET /reportes/dashboard-stats?anio=2025
+```
+
+**Query parameters:**
+
+| Parameter | Required | Default | Description |
+|---|---|---|---|
+| `anio` | Optional | Current year | The year used to group monthly sales data (e.g., `2025`) |
+
+**cURL example:**
+
+```bash
+curl -X GET "https://api.example.com/reportes/dashboard-stats?anio=2025" \
+  -H "Authorization: Bearer <token>"
+```
+
+The response includes:
+- **Total sales revenue** and transaction count for the current period
+- **Agent recharge totals** (`recargas`) for the period
+- **Stock health KPIs** — number of products below `stock_minimo`
+- **Monthly sales array** — 12 data points (one per month) for the requested year, suitable for bar or line charts
+
+---
+
+## Report Data Endpoints
+
+All endpoints below live under `/reportes/data/` and return JSON payloads structured for specific report types.
+
+### Sales by Date Range
+
+```http
+GET /reportes/data/ventas-rango?fechaInicio=2025-01-01&fechaFin=2025-01-31&auditor=Admin
+```
+
+Returns all sales within the date range with full line-item detail, payment method breakdown, and operator attribution. Includes the `auditor` string in the report header object for accountability.
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `fechaInicio` | ✅ | Start date in `YYYY-MM-DD` format |
+| `fechaFin` | ✅ | End date in `YYYY-MM-DD` format |
+| `auditor` | ✅ | Name or username of the person generating the report |
+
+**cURL example:**
+
+```bash
+curl -X GET "https://api.example.com/reportes/data/ventas-rango?fechaInicio=2025-01-01&fechaFin=2025-01-31&auditor=Admin" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Purchases by Date Range
+
+```http
+GET /reportes/data/compras-rango?fechaInicio=2025-01-01&fechaFin=2025-01-31&auditor=Admin
+```
+
+Returns all stock purchases within the date range. Useful for cost-of-goods reconciliation and supplier payment reports.
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `fechaInicio` | ✅ | Start date in `YYYY-MM-DD` format |
+| `fechaFin` | ✅ | End date in `YYYY-MM-DD` format |
+| `auditor` | ✅ | Name embedded in the report header |
+
+---
+
+### Inventory Snapshot
+
+```http
+GET /reportes/data/inventario?auditor=Admin
+```
+
+Returns the full product catalog with current stock levels, minimum stock thresholds, selling prices, costs, and computed margin data. Products below `stock_minimo` are flagged for easy highlighting in the PDF.
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `auditor` | ✅ | Name embedded in the report header |
+
+**cURL example:**
+
+```bash
+curl -X GET "https://api.example.com/reportes/data/inventario?auditor=Admin" \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Operator Productivity
+
+```http
+GET /reportes/data/productividad-operador?fechaInicio=2025-01-01&fechaFin=2025-01-31&operadorId=1
+```
+
+Returns sales and transaction metrics for one or all operators over a date range. Use this to generate individual operator performance reports or compare productivity across your team.
+
+**Query parameters:**
+
+| Parameter | Required | Description |
+|---|---|---|
+| `fechaInicio` | ✅ | Start date in `YYYY-MM-DD` format |
+| `fechaFin` | ✅ | End date in `YYYY-MM-DD` format |
+| `operadorId` | Optional | Filter to a specific operator by user ID. Omit to get data for all operators |
+
+---
+
+### Cash Register Session Movements
+
+```http
+GET /reportes/data/movimientos-caja/:idSesion
+```
+
+Returns all cash movements (INGRESO / EGRESO), sales totals, and agent totals for a specific `SesionCaja`. This is the data source for the end-of-shift cash reconciliation PDF.
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `idSesion` | `integer` | ID of the session (`SesionCaja.id`) |
+
+**Example:**
+
+```bash
+curl -X GET https://api.example.com/reportes/data/movimientos-caja/12 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Single Sale Receipt
+
+```http
+GET /reportes/data/venta/:id
+```
+
+Returns all data needed to render a customer receipt for a specific sale: operator name, session details, line items with quantities and prices, payment method, total, and timestamp.
+
+**Example:**
+
+```bash
+curl -X GET https://api.example.com/reportes/data/venta/45 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Product Info Sheet
+
+```http
+GET /reportes/data/producto/:id
+```
+
+Returns full product detail for a single product — name, barcode, category, stock levels, cost, price, and margin. Use to generate product fact sheets or stock cards.
+
+**Example:**
+
+```bash
+curl -X GET https://api.example.com/reportes/data/producto/3 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+### Caja Session History
+
+```http
+GET /reportes/data/caja-historial/:id
+```
+
+Returns the complete historical record for a physical caja: all past sessions with their open/close times, initial amounts, theoretical and real final amounts, and recorded differences.
+
+**Path parameters:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `id` | `integer` | ID of the physical `Caja` (not the session) |
+
+**Example:**
+
+```bash
+curl -X GET https://api.example.com/reportes/data/caja-historial/1 \
+  -H "Authorization: Bearer <token>"
+```
+
+---
+
+## Sales Summary (via Ventas Module)
+
+For an aggregated financial summary of sales over a date range — with totals grouped by payment method, transaction count, and average ticket — use the sales module's dedicated report endpoint:
+
+```http
+POST /ventas/reporte-resumen
+```
+
+**Request body:**
+
+```json
+{
+  "fechaInicio": "2025-01-01",
+  "fechaFin": "2025-01-31"
+}
+```
+
+**cURL example:**
+
+```bash
+curl -X POST https://api.example.com/ventas/reporte-resumen \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fechaInicio": "2025-01-01",
+    "fechaFin": "2025-01-31"
+  }'
+```
+
+This endpoint returns `200 OK` (not `201`) and is documented in the [Sales Workflow](/guides/sales-workflow) guide.
+
+---
+
+## All Report Endpoints at a Glance
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/reportes/dashboard-stats?anio=` | Dashboard KPIs and monthly trends |
+| `GET` | `/reportes/data/ventas-rango` | Sales list by date range |
+| `GET` | `/reportes/data/compras-rango` | Purchases list by date range |
+| `GET` | `/reportes/data/inventario` | Full inventory snapshot |
+| `GET` | `/reportes/data/productividad-operador` | Operator productivity metrics |
+| `GET` | `/reportes/data/movimientos-caja/:idSesion` | Session cash movements |
+| `GET` | `/reportes/data/venta/:id` | Single sale receipt data |
+| `GET` | `/reportes/data/producto/:id` | Product info sheet |
+| `GET` | `/reportes/data/caja-historial/:id` | Full caja session history |
+| `POST` | `/ventas/reporte-resumen` | Grouped sales summary for PDF |

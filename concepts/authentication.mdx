@@ -1,0 +1,355 @@
+---
+title: "Authentication and Authorization in Kantuta POS Backend"
+sidebarTitle: "Authentication"
+description: "Kantuta POS uses JWT access and refresh tokens with role-based access control. Learn how to authenticate, refresh tokens, and protect routes with guards."
+---
+
+Kantuta POS Backend secures its API with **JSON Web Tokens (JWT)**. Every protected endpoint requires a short-lived **access token** passed as a Bearer token in the `Authorization` header. When the access token expires, a separate long-lived **refresh token** can be exchanged for a new one without re-entering credentials. On top of token authentication, a **role-based access control** system (RBAC) restricts sensitive operations to the appropriate user roles — Administrador or Operador.
+
+---
+
+## JWT Authentication Flow
+
+<Steps>
+  <Step title="Login — obtain both tokens">
+    Send a `POST` request to `/auth/login` with your credentials. On success, the server returns an `access_token` and a `refresh_token`.
+
+    ```http
+    POST /auth/login
+    Content-Type: application/json
+
+    {
+      "email": "admin@kantuta.com",
+      "password": "your_password"
+    }
+    ```
+
+    **Response:**
+    ```json
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIs...",
+      "refresh_token": "eyJhbGciOiJIUzI1NiIs...",
+      "user": {
+        "id": 1,
+        "name": "Admin",
+        "email": "admin@kantuta.com",
+        "role": { "id": 1, "nombre": "Administrador" }
+      }
+    }
+    ```
+  </Step>
+  <Step title="Attach the access token to every request">
+    Include the access token as a Bearer token in the `Authorization` header of all subsequent requests.
+
+    ```http
+    GET /inventario/producto
+    Authorization: Bearer eyJhbGciOiJIUzI1NiIs...
+    ```
+  </Step>
+  <Step title="Handle 401 — refresh the access token">
+    When the server returns a `401 Unauthorized` (access token expired), call `/auth/refresh_token` using the **refresh token** as the Bearer value.
+
+    ```http
+    POST /auth/refresh_token
+    Authorization: Bearer <your_refresh_token>
+    ```
+
+    **Response:**
+    ```json
+    {
+      "access_token": "eyJhbGciOiJIUzI1NiIs..."
+    }
+    ```
+  </Step>
+  <Step title="Retry the original request">
+    Store the new `access_token`, update your HTTP client headers, and retry the request that previously received the `401`.
+  </Step>
+</Steps>
+
+---
+
+## Access Token vs Refresh Token
+
+| | Access Token | Refresh Token |
+|---|---|---|
+| **Purpose** | Authenticate individual API requests | Obtain a new access token after expiry |
+| **Lifetime** | Short (minutes to hours — set via `JWT_EXPIRATION`) | Longer (days — set via `JWT_REFRESH_EXPIRATION`) |
+| **Where to store** | In-memory or `sessionStorage` | `localStorage` or a secure HttpOnly cookie |
+| **Sent to** | Every protected API endpoint | Only `/auth/refresh_token` |
+
+<Warning>
+  The refresh token grants prolonged API access. Store it securely and never expose it in URLs, logs, or to third-party scripts. If a refresh token is compromised, the attacker can generate fresh access tokens until the refresh token itself expires.
+</Warning>
+
+---
+
+## Using the Token
+
+All protected routes require the `Authorization` header in this exact format:
+
+```http
+Authorization: Bearer <access_token>
+```
+
+There is no cookie-based authentication — every request must carry the header explicitly.
+
+---
+
+## Public Routes
+
+Routes decorated with `@Public()` skip the `AuthGuard` entirely. The decorator works by setting the `isPublic` metadata key, which the guard checks before attempting token verification:
+
+```typescript
+// src/auth/decorators/auth_public.decorator.ts
+export const IS_PUBLIC_KEY = 'isPublic';
+export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
+```
+
+The following endpoints are public and do **not** require an `Authorization` header:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/auth/login` | Obtain access + refresh tokens |
+| `POST` | `/auth/refresh_token` | Exchange refresh token for new access token |
+| `POST` | `/auth/reset/code` | Request a password-reset code by email |
+| `POST` | `/auth/confirm-code` | Verify the password-reset code |
+| `POST` | `/auth/reset-confirm` | Set a new password after code confirmation |
+| `POST` | `/usuario/register` | Register a new user account |
+
+---
+
+## Role-Based Access Control
+
+Kantuta POS defines two built-in roles:
+
+<CardGroup cols={2}>
+  <Card title="Administrador" icon="crown">
+    **Role ID: 1** — Full, unrestricted access to every endpoint. The `RolesGuard` short-circuits and returns `true` for any user with `roleId === 1` or `roleName === 'Administrador'`.
+  </Card>
+  <Card title="Operador" icon="user">
+    **Role ID: 2** — Access to operational endpoints (sales, cash sessions, agent transactions). Blocked from administrative-only routes.
+  </Card>
+</CardGroup>
+
+To restrict a controller or handler to specific roles, apply the `@Roles()` decorator:
+
+```typescript
+import { Roles } from 'src/auth/decorators/roles.decorator';
+
+@Roles('Administrador')
+@Delete(':id')
+remove(@Param('id') id: string) {
+  return this.service.remove(+id);
+}
+```
+
+The `RolesGuard` reads the `ROLES_KEY` metadata and compares it against the `roleName` / `roleId` stored in `request.user` (populated by `AuthGuard`):
+
+```typescript
+// If no @Roles() decorator, route only requires a valid JWT
+if (!requiredRoles) return true;
+
+// Administrators always pass
+if (user.roleId === 1 || user.roleName === 'Administrador') return true;
+
+// Operators pass only if 'Operador' is in the required roles
+if (user.roleId === 2 || user.roleName === 'Operador') {
+  return requiredRoles.includes('Operador');
+}
+```
+
+---
+
+## Password Reset Flow
+
+<Steps>
+  <Step title="Request a reset code">
+    Send the user's email address. The backend generates a random **6-character alphanumeric code**, stores it in Redis with a **15-minute TTL**, and delivers it to the inbox via the MailModule.
+
+    ```http
+    POST /auth/reset/code
+    Content-Type: application/json
+
+    { "email": "operador@kantuta.com" }
+    ```
+
+    **Response:**
+    ```json
+    { "message": "Código de verificación enviado al correo" }
+    ```
+  </Step>
+  <Step title="Verify the code">
+    Submit the email and the code from the inbox. The backend validates the code against the Redis entry.
+
+    ```http
+    POST /auth/confirm-code
+    Content-Type: application/json
+
+    {
+      "email": "operador@kantuta.com",
+      "code": "A1B2C3"
+    }
+    ```
+
+    **Response:**
+    ```json
+    { "message": "Código de verificación correcto" }
+    ```
+  </Step>
+  <Step title="Set the new password">
+    Once the code is confirmed, submit the new password. The backend hashes it and updates the user record.
+
+    ```http
+    POST /auth/reset-confirm
+    Content-Type: application/json
+
+    {
+      "email": "operador@kantuta.com",
+      "newPassword": "NewSecurePassword123!"
+    }
+    ```
+
+    **Response:**
+    ```json
+    { "message": "Contraseña actualizada correctamente" }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The 6-character code expires after **15 minutes**. If the user does not complete the flow within that window, they must request a new code from step 1.
+</Note>
+
+---
+
+## Change Password (Authenticated)
+
+An already-authenticated user can change their own password without going through the reset code flow:
+
+```http
+POST /auth/change-password
+Authorization: Bearer <access_token>
+Content-Type: application/json
+
+{
+  "email": "operador@kantuta.com",
+  "newPassword": "AnotherSecurePass99!"
+}
+```
+
+This endpoint requires a valid access token — the `@Public()` decorator is **not** applied here.
+
+---
+
+## Axios Interceptor for Auto-Refresh (TypeScript)
+
+The following pattern handles token injection and transparent refresh in a React + TypeScript frontend, based on the official integration guide:
+
+```typescript
+import axios from 'axios';
+
+// 1. Create the Axios instance
+const api = axios.create({
+  baseURL: 'http://localhost:3000',
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
+// 2. Inject the access token on every outgoing request
+api.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('access_token');
+    if (token && config.headers) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error),
+);
+
+// 3. Auto-refresh on 401 responses
+api.interceptors.response.use(
+  (response) => response,
+  async (error) => {
+    const originalRequest = error.config;
+
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      try {
+        const refreshToken = localStorage.getItem('refresh_token');
+
+        // Call refresh endpoint directly (bypasses the request interceptor)
+        const res = await axios.post(
+          'http://localhost:3000/auth/refresh_token',
+          {},
+          { headers: { Authorization: `Bearer ${refreshToken}` } },
+        );
+
+        const newAccessToken = res.data.access_token;
+        localStorage.setItem('access_token', newAccessToken);
+
+        // Retry the original request with the new token
+        originalRequest.headers.Authorization = `Bearer ${newAccessToken}`;
+        return api(originalRequest);
+      } catch (refreshError) {
+        // Refresh token is also expired — force re-login
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        window.location.href = '/login';
+        return Promise.reject(refreshError);
+      }
+    }
+
+    return Promise.reject(error);
+  },
+);
+
+export default api;
+```
+
+<Tip>
+  Import and use `api` (instead of the raw `axios` object) throughout your application so that every call benefits from automatic token injection and silent refresh.
+</Tip>
+
+---
+
+## Auth Endpoint Reference
+
+<Accordion title="POST /auth/login — Iniciar sesión">
+  **Public.** Returns `access_token`, `refresh_token`, and the full `Usuario` object.
+
+  ```typescript
+  // Request body
+  interface LoginRequest {
+    email: string;    // Valid email format
+    password: string;
+  }
+
+  // Response
+  interface LoginResponse {
+    access_token: string;
+    refresh_token: string;
+    user: Usuario;
+  }
+  ```
+</Accordion>
+
+<Accordion title="POST /auth/refresh_token — Refrescar token">
+  **Public.** Pass the refresh token as a Bearer token in the `Authorization` header (no request body needed). Returns a new `access_token`.
+
+  ```typescript
+  interface RefreshTokenResponse {
+    access_token: string;
+  }
+  ```
+</Accordion>
+
+<Accordion title="GET /auth/roles/list — Listar roles (autenticado)">
+  **Requires authentication.** Returns all available roles from the database.
+</Accordion>
+
+<Accordion title="GET /auth — Listar usuarios (autenticado)">
+  **Requires authentication.** Administrative endpoint to list all registered user accounts.
+</Accordion>
