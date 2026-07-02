@@ -418,6 +418,8 @@ Partially updates an auth account. All body fields are optional; only the fields
 
 ### Request body (`UpdateAuthDto` — all fields optional)
 
+`UpdateAuthDto` extends `CreateAuthDto` via `PartialType`, so every field from registration is also accepted here as an optional update.
+
 <ParamField body="name" type="string">
   Display name for the account.
 </ParamField>
@@ -432,6 +434,30 @@ Partially updates an auth account. All body fields are optional; only the fields
 
 <ParamField body="estado" type="boolean">
   Account active/inactive flag.
+</ParamField>
+
+<ParamField body="nombres" type="string">
+  Updated given name(s) for the linked `Persona` record.
+</ParamField>
+
+<ParamField body="p_apellido" type="string">
+  Updated paternal surname for the linked `Persona` record.
+</ParamField>
+
+<ParamField body="s_apellido" type="string">
+  Updated maternal surname for the linked `Persona` record.
+</ParamField>
+
+<ParamField body="fecha_nacimiento" type="string">
+  Updated date of birth (`YYYY-MM-DD`) for the linked `Persona` record.
+</ParamField>
+
+<ParamField body="genero" type="string">
+  Updated gender code (`"M"` or `"F"`) for the linked `Persona` record.
+</ParamField>
+
+<ParamField body="id_role" type="number">
+  ID of the role to assign to this account. See `GET /auth/roles/list` for available values.
 </ParamField>
 
 <RequestExample>

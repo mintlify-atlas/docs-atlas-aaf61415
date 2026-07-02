@@ -1,5 +1,5 @@
 ---
-title: "Users API: Registration and Account Management"
+title: "Users API: Register and Manage Kantuta POS Accounts"
 sidebarTitle: "Users"
 description: "REST endpoints for registering new users, listing accounts, and updating user profiles in Kantuta POS. POST /usuario/register is public."
 ---
@@ -149,7 +149,7 @@ curl -X POST http://localhost:3000/usuario/register \
 
 <span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
 
-Returns a paginated list of all registered user accounts. Each user record includes the linked `Persona` and `Role` objects. Deactivated accounts (`estado: false`) are included in the response — filter client-side if needed.
+Returns all registered user accounts as an array. Each user record includes the linked `Persona` and `Role` objects. Deactivated accounts (`estado: false`) are included in the response — filter client-side if needed.
 
 ### Request headers
 
@@ -323,6 +323,37 @@ curl -X PATCH http://localhost:3000/usuario/4 \
 
 ---
 
+## DELETE /usuario/:id
+
+<span className="text-sm font-semibold px-2 py-0.5 rounded bg-yellow-100 text-yellow-800">PROTECTED</span>
+
+Removes the user account identified by `id`. Requires a valid Bearer token.
+
+### Path parameters
+
+<ParamField path="id" type="number" required>
+  The numeric primary key of the user account to delete.
+</ParamField>
+
+### Request headers
+
+<ParamField header="Authorization" type="string" required>
+  `Bearer <access_token>` — obtained from `POST /auth/login`.
+</ParamField>
+
+### Response
+
+Returns the result from the underlying service call on success.
+
+<RequestExample>
+```bash cURL
+curl -X DELETE http://localhost:3000/usuario/4 \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+```
+</RequestExample>
+
+---
+
 ## Usuario TypeScript Interface
 
 Use these interfaces in your React + TypeScript frontend (e.g. `src/types/api.d.ts`):
@@ -400,5 +431,9 @@ export async function listUsers(): Promise<{ status: number; message: string; da
 export async function updateUser(id: number, patch: Partial<RegisterUsuarioRequest>): Promise<Usuario> {
   const response = await api.patch<Usuario>(`/usuario/${id}`, patch);
   return response.data;
+}
+
+export async function deleteUser(id: number): Promise<void> {
+  await api.delete(`/usuario/${id}`);
 }
 ```

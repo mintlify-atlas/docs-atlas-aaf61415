@@ -1,10 +1,10 @@
 ---
 title: "Mail API: Email Notification Endpoints"
 sidebarTitle: "Mail"
-description: "REST endpoint for sending email notifications from Kantuta POS Backend. Supports generic messages and templated emails via Nodemailer or Resend."
+description: "REST endpoint for sending email notifications from Kantuta POS Backend. Supports generic messages and Handlebars-templated emails delivered via Resend."
 ---
 
-The Mail module handles all outbound email delivery for Kantuta POS. It exposes a single public REST endpoint for sending ad-hoc messages and powers four Handlebars-rendered HTML templates that are triggered automatically by other modules — welcome confirmations, password reset codes, and post-change security alerts. Under the hood the service is wired to **Resend** for transactional delivery (configured via `RESEND_API_KEY`), with a full **Nodemailer / SMTP** transport available as a fallback through the `@nestjs-modules/mailer` integration.
+The Mail module handles all outbound email delivery for Kantuta POS. It exposes a single public REST endpoint for sending ad-hoc messages and powers four Handlebars-rendered HTML templates that are triggered automatically by other modules — welcome confirmations, password reset codes, and post-change security alerts. All email delivery is handled exclusively by **Resend** (`resend.emails.send()`), configured via `RESEND_API_KEY`. The `@nestjs-modules/mailer` SMTP transport is present in the module configuration but is not called at runtime by any `MailService` method.
 
 ---
 
@@ -98,7 +98,7 @@ The template consumed by `POST /mail`. Wraps any arbitrary plain-text `message` 
 ## Transport configuration
 
 <Note>
-  The production service uses **Resend** (`RESEND_API_KEY`). The `MailerModule` SMTP transport (configured with `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_SECURE`) is registered as the NestJS mailer transport but the `MailService` methods call `resend.emails.send()` directly, so Resend takes precedence at runtime.
+  All `MailService` methods call `resend.emails.send()` directly using the **Resend** SDK. The `MailerModule` SMTP transport (configured with `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USER`, `EMAIL_PASSWORD`, and `EMAIL_SECURE`) is wired into the module but is not invoked by any service method — it is legacy infrastructure and has no effect on sent emails.
 </Note>
 
 Set the following environment variables in your deployment platform (e.g. Render):

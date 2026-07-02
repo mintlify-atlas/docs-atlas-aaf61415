@@ -66,6 +66,9 @@ Creates a new physical cash register. Each caja can be configured to accept only
 <ParamField body="especialidad" type="string" required>
   Operational mode for the caja. One of: `SOLO_VENTAS`, `SOLO_AGENTES`, `MIXTA`.
 </ParamField>
+<ParamField body="saldo" type="number" required>
+  Base balance assigned to this register (minimum `0`). Used as the starting reference amount for reconciliation.
+</ParamField>
 <ParamField body="id_user_create" type="number">
   ID of the administrator creating this record (for audit trail).
 </ParamField>
@@ -77,6 +80,7 @@ curl -X POST https://api.example.com/cajas \
   -d '{
     "nombre": "Caja 03 - Mixta",
     "especialidad": "MIXTA",
+    "saldo": 500.00,
     "id_user_create": 1
   }'
 ```

@@ -1,7 +1,7 @@
 ---
 title: "Kantuta POS Backend Architecture and Module Structure"
 sidebarTitle: "Architecture"
-description: "Explore how Kantuta POS Backend is organized into NestJS domain modules, how they share services, and how the request lifecycle flows through guards and filters."
+description: "How Kantuta POS Backend structures NestJS domain modules, wires shared infrastructure, and routes requests through guards, pipes, and filters."
 ---
 
 Kantuta POS Backend is built with **NestJS 11** following a **domain-driven modular architecture**. Each business domain — inventory, sales, cash registers, agent transactions, and more — lives in its own self-contained NestJS module with its own controllers, services, DTOs, and TypeORM entities. Modules communicate through dependency injection rather than direct coupling, making the codebase straightforward to extend and test in isolation. The root `AppModule` wires every domain module together along with shared infrastructure concerns like the database connection, Redis cache, JWT, and global request pipeline.
@@ -18,6 +18,12 @@ The table below lists every module registered in `AppModule` and the domain it o
   </Card>
   <Card title="AuthModule" icon="shield-halved">
     Owns authentication and access control. Provides `AuthGuard` (JWT verification), `RolesGuard` (role-based authorization), and the `AuthController`. Entities: `auth.entity`, `role.entity`.
+  </Card>
+  <Card title="PersonaModule" icon="id-card">
+    Manages natural-person profiles — names, surnames, date of birth, and gender. Each `Persona` record is linked one-to-one with a `Usuario` account and stores identity information separately from credentials.
+  </Card>
+  <Card title="UsuarioModule" icon="user-gear">
+    Manages system user accounts (operators and administrators). Handles user registration, credential storage, and the association between a `Usuario` and its `Persona` profile and `Role`.
   </Card>
   <Card title="InventarioModule" icon="boxes-stacked">
     Composed of two sub-modules: **CategoriasModule** and **ProductosModule**. Manages the product catalog, barcode lookup, pricing, stock levels, and stock alerts.
@@ -52,8 +58,11 @@ The table below lists every module registered in `AppModule` and the domain it o
   <Card title="GatewayModule" icon="plug">
     Exposes a **Socket.IO** WebSocket gateway so connected frontends receive real-time push events (new sales, stock changes, session state updates) without polling the REST API.
   </Card>
-  <Card title="GeminiModule / AiAssistantModule" icon="robot">
-    Integrates Google Gemini for AI-powered POS assistance — natural-language queries against inventory, sales summaries, and operator guidance.
+  <Card title="GeminiModule" icon="robot">
+    Provides a low-level integration with the Google Gemini API. Exposes a configured Gemini client that other modules (such as `AiAssistantModule`) use to send prompts and receive generated responses.
+  </Card>
+  <Card title="AiAssistantModule" icon="wand-magic-sparkles">
+    Builds the AI-powered POS assistant on top of `GeminiModule`. Handles natural-language queries against inventory and sales data, generates summaries, and provides operator guidance through the REST API.
   </Card>
 </CardGroup>
 

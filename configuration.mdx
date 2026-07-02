@@ -136,32 +136,44 @@ JWT configuration lives in `src/config/jwt.config.ts`. The `JWT_SECRET` is manda
 
 ## Mail
 
-Kantuta supports two mail backends. Use **either** the Nodemailer SMTP variables **or** the Resend API key, depending on your preferred provider.
+Kantuta supports two mail backends configured in `src/mail/mail.module.ts`. Use **either** the Nodemailer SMTP variables **or** the Resend API key, depending on your preferred provider.
 
 ### Nodemailer (SMTP)
 
-<ParamField path="MAIL_HOST" type="string">
+<ParamField path="EMAIL_HOST" type="string">
   SMTP server hostname (e.g. `smtp.gmail.com`, `smtp.mailgun.org`).
 </ParamField>
 
-<ParamField path="MAIL_USER" type="string">
+<ParamField path="EMAIL_PORT" type="number">
+  TCP port of the SMTP server.
+
+  **Common values:** `587` (STARTTLS), `465` (SSL), `25`
+</ParamField>
+
+<ParamField path="EMAIL_SECURE" type="string">
+  Set to `'true'` to enable SSL on the SMTP connection (typically used with port `465`). For STARTTLS on port `587`, leave this `'false'`.
+
+  **Accepted values:** `'true'` | `'false'`
+</ParamField>
+
+<ParamField path="EMAIL_USER" type="string">
   SMTP authentication username (usually the sending email address).
 </ParamField>
 
-<ParamField path="MAIL_PASSWORD" type="string">
+<ParamField path="EMAIL_PASSWORD" type="string">
   SMTP authentication password or app-specific password.
 </ParamField>
 
-<ParamField path="MAIL_FROM" type="string">
-  The `From` address used on outgoing emails.
+<ParamField path="EMAIL_REJECT_UNAUTHORIZED" type="string">
+  Set to `'true'` to enforce strict TLS certificate validation. Set to `'false'` to allow self-signed certificates (useful in local or Debian-hosted environments where certificate chains may be incomplete).
 
-  **Example:** `"Kantuta POS <no-reply@yourdomain.com>"`
+  **Accepted values:** `'true'` | `'false'`
 </ParamField>
 
 ### Resend
 
 <ParamField path="RESEND_API_KEY" type="string">
-  API key from your [Resend](https://resend.com) account. When configured, the `MailModule` uses the Resend SDK instead of Nodemailer SMTP.
+  API key from your [Resend](https://resend.com) account. When configured, the `MailService` uses the Resend SDK to send transactional emails.
 </ParamField>
 
 ---
@@ -205,10 +217,12 @@ PORT=3000
 NODE_ENV=development
 
 # ── Mail (SMTP) ───────────────────────────────────────────
-MAIL_HOST=smtp.example.com
-MAIL_USER=no-reply@example.com
-MAIL_PASSWORD=smtp_password
-MAIL_FROM="Kantuta POS <no-reply@example.com>"
+EMAIL_HOST=smtp.example.com
+EMAIL_PORT=587
+EMAIL_SECURE=false
+EMAIL_USER=no-reply@example.com
+EMAIL_PASSWORD=smtp_password
+EMAIL_REJECT_UNAUTHORIZED=false
 
 # ── Mail (Resend — alternative to SMTP) ──────────────────
 # RESEND_API_KEY=re_xxxxxxxxxxxxxxxxxxxx

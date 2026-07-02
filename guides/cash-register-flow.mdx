@@ -1,7 +1,7 @@
 ---
 title: "Cash Register Session Flow: Open, Operate, and Close"
 sidebarTitle: "Cash Register Flow"
-description: "Step-by-step guide to managing cash register sessions in Kantuta POS: opening a shift, recording movements, processing transactions, and closing with reconciliation."
+description: "Step-by-step guide to managing cash register sessions in Kantuta POS: open a shift, record movements, process transactions, and close with reconciliation."
 ---
 
 In Kantuta POS, every financial transaction — whether a sale, a purchase paid from the drawer, or a cash movement — must be linked to an active **cash register session** (`SesionCaja`). A session represents a single operator shift: it opens with a counted starting float, accumulates all activity during the shift, and closes with a physical cash count that the backend reconciles against the theoretical balance. This lifecycle ensures full auditability and eliminates any end-of-day discrepancies going unexplained.

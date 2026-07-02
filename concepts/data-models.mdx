@@ -1,5 +1,5 @@
 ---
-title: "Core Data Models and TypeScript Interfaces"
+title: "Kantuta POS Core Data Models and TypeScript Interfaces"
 sidebarTitle: "Data Models"
 description: "Complete TypeScript interface reference for all Kantuta POS entities: users, products, sales, cash registers, agent transactions, purchases, and recargas."
 ---
@@ -44,7 +44,7 @@ export interface BaseEntityAudit {
   ```typescript
   export interface Role {
     id: number;
-    nombre: 'admin' | 'user' | string; // 'Administrador' or 'Operador' in practice
+    nombre: 'admin' | 'Administrador' | 'user' | 'Operador' | string;
     descripcion?: string;
   }
   ```
@@ -52,7 +52,7 @@ export interface BaseEntityAudit {
   | Field | Notes |
   |---|---|
   | `id` | `1` = Administrador, `2` = Operador |
-  | `nombre` | Used by `RolesGuard` for authorization checks |
+  | `nombre` | Used by `RolesGuard` for authorization checks. The guard recognizes both `'admin'`/`'Administrador'` (role ID 1) and `'user'`/`'Operador'` (role ID 2). |
 </Accordion>
 
 <Accordion title="Persona — Natural person profile">
@@ -324,7 +324,7 @@ export interface BaseEntityAudit {
 
 export interface Role {
   id: number;
-  nombre: 'admin' | 'user' | string;
+  nombre: 'admin' | 'Administrador' | 'user' | 'Operador' | string;
   descripcion?: string;
 }
 

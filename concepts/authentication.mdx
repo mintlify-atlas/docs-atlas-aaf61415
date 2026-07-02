@@ -124,7 +124,7 @@ Kantuta POS defines two built-in roles:
 
 <CardGroup cols={2}>
   <Card title="Administrador" icon="crown">
-    **Role ID: 1** — Full, unrestricted access to every endpoint. The `RolesGuard` short-circuits and returns `true` for any user with `roleId === 1` or `roleName === 'Administrador'`.
+    **Role ID: 1** — Full, unrestricted access to every endpoint. The `RolesGuard` short-circuits and returns `true` for any user with `roleId === 1`, `roleName === 'admin'`, or `roleName === 'Administrador'`.
   </Card>
   <Card title="Operador" icon="user">
     **Role ID: 2** — Access to operational endpoints (sales, cash sessions, agent transactions). Blocked from administrative-only routes.
@@ -149,11 +149,13 @@ The `RolesGuard` reads the `ROLES_KEY` metadata and compares it against the `rol
 // If no @Roles() decorator, route only requires a valid JWT
 if (!requiredRoles) return true;
 
-// Administrators always pass
-if (user.roleId === 1 || user.roleName === 'Administrador') return true;
+// Administrators always pass (supports both 'admin' and 'Administrador' role names)
+if (user && (user.roleId === 1 || user.roleName === 'admin' || user.roleName === 'Administrador')) {
+  return true;
+}
 
-// Operators pass only if 'Operador' is in the required roles
-if (user.roleId === 2 || user.roleName === 'Operador') {
+// Operators pass only if 'Operador' is in the required roles (supports 'user' and 'Operador')
+if (user && (user.roleId === 2 || user.roleName === 'user' || user.roleName === 'Operador')) {
   return requiredRoles.includes('Operador');
 }
 ```

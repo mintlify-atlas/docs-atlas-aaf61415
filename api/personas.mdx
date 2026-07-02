@@ -1,7 +1,7 @@
 ---
-title: "Personas API: Personal Profile Management"
+title: "Personas API: Manage Personal Profiles in Kantuta POS"
 sidebarTitle: "Personas"
-description: "REST endpoints for creating and managing personal profiles (names, DOB, gender) linked to user accounts in Kantuta POS Backend."
+description: "REST endpoints for creating and managing personal profiles (real names, date of birth, gender) linked to user accounts in Kantuta POS Backend."
 ---
 
 The `/persona` resource manages the **personal data layer** of the Kantuta POS identity model. Every `Usuario` (login account) has exactly one `Persona` that holds the individual's real name, date of birth, and gender. This separation keeps credentials distinct from personal information and simplifies audits. While a `Persona` can be created in isolation via `POST /persona`, in most workflows it is created automatically alongside a `Usuario` through `POST /usuario/register`. The update endpoint deliberately uses `PUT` (not `PATCH`) and accepts the record ID inside the request body rather than the URL path.
